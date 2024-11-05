@@ -1,4 +1,0 @@
-class mynp{
-    public:
-        
-};
