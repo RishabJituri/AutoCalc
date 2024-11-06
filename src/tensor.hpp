@@ -10,11 +10,19 @@ class tensor{
 
         tensor(std::vector<int> size):size(size){
             dim = (size).size();
-            mat = create_matrix(size.data());
+            mat = __create_matrix__(size.data(),dim);
             
         }
 
-        static tensor random(std::vector<int> size, double min, double max){}
+        double operator[](std::vector<int> index);
+
+        static tensor random(std::vector<int> size, double min, double max);
+
+        static tensor zeros(std::vector<int> size);
+
+        static tensor matmul(tensor A, tensor B, std::vector<int> dims);
+
+
         
 
 

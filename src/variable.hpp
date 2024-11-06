@@ -16,6 +16,8 @@ public:
     forward_variable(double value, bool gt) : variable(value, gt) {}
 
     forward_variable operator+(const variable& other) const;
+    
     forward_variable operator*(const variable& other) const;
+    
     forward_variable operator^(const variable& other) const;
 };
