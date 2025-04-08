@@ -15,6 +15,7 @@ int main(){
 
     matrix * tensor = new matrix;
     (tensor) = (matrix*) malloc(sizeof(matrix));
+    printf("uhh");
     
     
     

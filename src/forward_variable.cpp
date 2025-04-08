@@ -24,6 +24,29 @@ forward_variable forward_variable::operator^(const variable& other) const{
     return yield;
 }
 
+forward_variable forward_variable::operator+(const double& other) const{
+    
+    forward_variable yield(this->item + other,this->grad_type);
+    yield.grad = this->grad;
+    return yield;
+}
+
+forward_variable forward_variable::operator*(const double& other) const{
+    
+    forward_variable yield(this->item * other,this->grad_type);
+    yield.grad = this->grad * other;
+    return yield;
+}
+
+forward_variable forward_variable::operator^(const double& other) const{
+    
+    double exponent_yield = pow(this->item,other);
+    forward_variable yield(exponent_yield,this->grad_type);
+    yield.grad = this->grad * other * pow(this->item,other-1);
+    return yield;
+}
+
+
 
     
     

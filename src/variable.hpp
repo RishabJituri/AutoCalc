@@ -20,4 +20,10 @@ public:
     forward_variable operator*(const variable& other) const;
     
     forward_variable operator^(const variable& other) const;
+
+    forward_variable operator+(const double& other) const;
+    
+    forward_variable operator*(const double& other) const;
+    
+    forward_variable operator^(const double& other) const;
 };
