@@ -87,6 +87,7 @@
         "numeric": "cpp",
         "random": "cpp",
         "algorithm": "cpp",
-        "ranlib.h": "c"
+        "ranlib.h": "c",
+        "math.h": "c"
     }
 }
