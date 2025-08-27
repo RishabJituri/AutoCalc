@@ -8,7 +8,7 @@ BUILD_DIR := build
 OBJ_DIR   := $(BUILD_DIR)/obj
 BIN       := $(BUILD_DIR)/tests
 
-SRC_FILES  := $(wildcard src/*.cpp)
+SRC_FILES  := $(shell find src -type f -name '*.cpp')
 TEST_FILES := $(wildcard tests/*.cpp)
 OBJS       := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(SRC_FILES))
 TEST_OBJS  := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(TEST_FILES))
