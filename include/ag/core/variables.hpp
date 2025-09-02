@@ -6,6 +6,12 @@
 
 namespace ag {
 
+// Global grad mode (thread-local). Controls whether new nodes require_grad.
+inline thread_local bool __grad_enabled = true;
+inline bool is_grad_enabled() { return __grad_enabled; }
+inline void set_grad_enabled(bool v) { __grad_enabled = v; }
+
+
 struct Node {
   std::vector<double> value;                // flattened tensor
   std::vector<double> grad;                 // same size as value

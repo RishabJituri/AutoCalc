@@ -1,5 +1,4 @@
 #include "ag/ops/graph.hpp"
-#include "ag/ops/tensor_utils.hpp"
 
 namespace ag {
 
@@ -14,8 +13,11 @@ Variable stop_gradient(const Variable& x) {
   return make_from_node(n);
 }
 
-Variable detach(const Variable& x) {
-  return stop_gradient(x); // your existing implementation
-}
-} // namespace ag
 
+Variable detach(const Variable& x) {
+  return stop_gradient(x);
+}
+
+NoGradGuard::NoGradGuard()  { ag::set_grad_enabled(false); }
+NoGradGuard::~NoGradGuard() { ag::set_grad_enabled(true);  }
+} // namespace ag

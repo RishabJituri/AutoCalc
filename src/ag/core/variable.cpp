@@ -30,7 +30,7 @@ Variable::Variable(const std::vector<double>& value,
   n = std::make_shared<Node>();
   n->value = value;
   n->shape = shape;
-  n->requires_grad = requires_grad;
+  n->requires_grad = (requires_grad && ag::is_grad_enabled());
   n->grad.assign(value.size(), 0.0);
 }
 

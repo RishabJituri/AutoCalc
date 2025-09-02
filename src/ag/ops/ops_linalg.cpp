@@ -1,4 +1,4 @@
-#include "ag/core/variables.hpp"
+#include "ag/ops/linalg.hpp"
 #include "ag/ops/tensor_utils.hpp"
 #include <stdexcept>
 

@@ -7,33 +7,42 @@
 
 namespace ag::nn {
 
+// src/ag/nn/module.cpp
 std::vector<Variable*> Module::parameters() {
-  std::vector<Variable*> out = _parameters();
+  std::vector<Variable*> out;
+  out.reserve(16);
 
-  // Deduplicate by pointer address (in case the same Variable* is returned twice)
-  auto dedup = [&](std::vector<Variable*>& vec) {
-    std::unordered_set<Variable*> seen;
-    std::vector<Variable*> tmp;
-    tmp.reserve(vec.size());
-    for (auto* p : vec) {
-      if (!p || seen.count(p)) continue;
-      seen.insert(p);
-      tmp.push_back(p);
-    }
-    vec.swap(tmp);
+  auto append = [&](const std::vector<Variable*>& src) {
+    for (auto* p : src) if (p) out.push_back(p);
   };
 
-  dedup(out);
+  // Local unnamed params
+  append(_parameters());
 
-  for (Module* child : submodules_) {
+  // Local explicitly named params
+  for (auto& [name, p] : named_params_) if (p) out.push_back(p);
+
+  // Unnamed children
+  for (auto* child : submodules_) {
     if (!child) continue;
-    auto child_ps = child->parameters();
-    out.insert(out.end(), child_ps.begin(), child_ps.end());
+    auto child_params = child->parameters();
+    out.insert(out.end(), child_params.begin(), child_params.end());
   }
 
-  dedup(out);
+  // Named children (may overlap with unnamed; dedup below)
+  for (auto& [cname, child] : named_children_) {
+    if (!child) continue;
+    auto child_params = child->parameters();
+    out.insert(out.end(), child_params.begin(), child_params.end());
+  }
+
+  // Dedup by pointer (stable & safe with ASan/libc++)
+  std::sort(out.begin(), out.end());
+  out.erase(std::unique(out.begin(), out.end()), out.end());
   return out;
 }
+
+
 
 std::vector<std::pair<std::string, Variable*>> Module::named_parameters(const std::string& prefix) {
   std::vector<std::pair<std::string, Variable*>> out;
