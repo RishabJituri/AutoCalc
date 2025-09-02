@@ -1,4 +1,4 @@
-#include "ag/core/tensor_utils.hpp"
+#include "ag/ops/tensor_utils.hpp"
 #include <algorithm>
 #include <numeric>
 #include <stdexcept>
