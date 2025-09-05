@@ -1,3 +1,5 @@
 *.venv
 Data/*
 *build/*
+.DS_Store
+.vscode
