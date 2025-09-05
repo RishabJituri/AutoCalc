@@ -23,10 +23,10 @@ TEST("optim/sgd/linear_regression_decreases_loss") {
     const std::size_t In=2, Out=1, B=16;
     // True weights/bias to learn
     const double w0 = 2.0, w1 = -3.0, btrue = 0.5;
-
+ 
     // Model
     Linear lin(In, Out, /*bias=*/true, /*init_scale=*/0.01, /*seed=*/123ull);
-    SGD opt(/*lr=*/0.05);
+    SGD opt(/*lr=*/0.1, /*momentum=*/0.9, /*nesterov=*/true, /*weight_decay=*/0.0);
 
     // One mini-batch synthetic data
     std::vector<double> xv(B*In);

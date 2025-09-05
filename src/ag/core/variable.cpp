@@ -68,4 +68,6 @@ void Variable::backward(const std::vector<double>& seed) {
   }
 }
 
+
+
 } // namespace ag

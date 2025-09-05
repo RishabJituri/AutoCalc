@@ -16,31 +16,28 @@ std::vector<Variable*> Module::parameters() {
     for (auto* p : src) if (p) out.push_back(p);
   };
 
-  // Local unnamed params
+  // Local unnamed + explicitly named
   append(_parameters());
-
-  // Local explicitly named params
   for (auto& [name, p] : named_params_) if (p) out.push_back(p);
 
-  // Unnamed children
+  // Children (only once via submodules_)
   for (auto* child : submodules_) {
     if (!child) continue;
     auto child_params = child->parameters();
     out.insert(out.end(), child_params.begin(), child_params.end());
   }
 
-  // Named children (may overlap with unnamed; dedup below)
-  for (auto& [cname, child] : named_children_) {
-    if (!child) continue;
-    auto child_params = child->parameters();
-    out.insert(out.end(), child_params.begin(), child_params.end());
+  // Order-preserving dedup by pointer
+  std::vector<Variable*> deduped;
+  deduped.reserve(out.size());
+  std::unordered_set<Variable*> seen;
+  seen.reserve(out.size());
+  for (auto* p : out) {
+    if (p && seen.insert(p).second) deduped.push_back(p);
   }
-
-  // Dedup by pointer (stable & safe with ASan/libc++)
-  std::sort(out.begin(), out.end());
-  out.erase(std::unique(out.begin(), out.end()), out.end());
-  return out;
+  return deduped;
 }
+
 
 
 
