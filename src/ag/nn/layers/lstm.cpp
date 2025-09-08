@@ -120,4 +120,105 @@ Variable LSTMCell::forward(const Variable& x) {
   return forward_step(x, h0, c0).first;
 }
 
+// --- add this in src/ag/nn/layers/lstm.cpp (inside namespace ag::nn) ---
+
+LSTM::LSTM(std::size_t input_size, std::size_t hidden_size, int num_layers, bool bias)
+: input_size_(input_size), hidden_size_(hidden_size), num_layers_(num_layers), bias_(bias) {
+  if (num_layers_ <= 0) throw std::invalid_argument("LSTM: num_layers must be >=1");
+  layers_.reserve(num_layers_);
+  // first layer takes input_size_, subsequent layers take hidden_size_
+  layers_.push_back(std::make_shared<LSTMCell>(input_size_, hidden_size_, bias_));
+  for (int l = 1; l < num_layers_; ++l) {
+    layers_.push_back(std::make_shared<LSTMCell>(hidden_size_, hidden_size_, bias_));
+  }
+  for (int l = 0; l < num_layers_; ++l) {
+    register_module(std::string("lstmcell_") + std::to_string(l), *layers_[l]);
+  }
+}
+
+Variable LSTM::forward(const Variable& X) {
+  // Expect X: [B,T,I]  (batch-first)
+  const auto& s = X.shape();
+  if (s.size() != 3) throw std::invalid_argument("LSTM::forward expects X shape [B,T,I]");
+  const std::size_t B = s[0], T = s[1], I = s[2];
+  if (I != input_size_) throw std::invalid_argument("LSTM::forward input_size mismatch");
+
+  // Helper: slice X[:,t,:] -> [B,I]
+  auto slice_BTI_to_BI = [&](std::size_t t)->Variable {
+    const auto& vals = X.value();
+    std::vector<double> out(B * input_size_);
+    for (std::size_t b = 0; b < B; ++b) {
+      const std::size_t base = (b * T + t) * input_size_;
+      for (std::size_t i = 0; i < input_size_; ++i) out[b*input_size_ + i] = vals[base + i];
+    }
+    // Inputs don’t require grad
+    return Variable(out, {B, input_size_}, /*requires_grad=*/false);
+  };
+
+  // Collect per-timestep outputs from the LAST layer: each [B,H]
+  std::vector<Variable> outs; outs.reserve(T);
+
+  for (std::size_t t = 0; t < T; ++t) {
+    Variable x_t = slice_BTI_to_BI(t);            // [B,I]
+    for (int l = 0; l < num_layers_; ++l) {
+      x_t = layers_[l]->forward(x_t);             // LSTMCell expects [B,I] and returns [B,H]
+    }
+    outs.push_back(x_t);                           // last layer’s h_t
+  }
+
+  // Stack outs into Y:[B,T,H] and route grads back to each outs[t]
+  auto node = std::make_shared<ag::Node>();
+  node->shape = {B, T, hidden_size_};
+  node->value.resize(B * T * hidden_size_);
+  node->grad.assign(B * T * hidden_size_, 0.0);
+  node->requires_grad = false;
+
+  node->parents.reserve(outs.size());
+  for (const auto& v : outs) {
+    node->parents.push_back(v.n);
+    if (v.n && v.n->requires_grad) node->requires_grad = true;
+  }
+
+  // forward write
+  for (std::size_t t = 0; t < T; ++t) {
+    const auto& hv = outs[t].value();             // [B,H]
+    for (std::size_t b = 0; b < B; ++b) {
+      const std::size_t base_out = (b * T + t) * hidden_size_;
+      const std::size_t base_in  = b * hidden_size_;
+      for (std::size_t k = 0; k < hidden_size_; ++k) {
+        node->value[base_out + k] = hv[base_in + k];
+      }
+    }
+  }
+
+  // backward: split grad Y -> each outs[t]
+  std::weak_ptr<ag::Node> wnode = node;
+  node->backward = [wnode, B, T, H = hidden_size_]() {
+    auto sp = wnode.lock(); if (!sp) return;
+    auto& g = sp->grad;
+    for (std::size_t t = 0; t < T; ++t) {
+      auto parent = sp->parents[t].get();
+      if (!parent || !parent->requires_grad) continue;
+      for (std::size_t b = 0; b < B; ++b) {
+        const std::size_t base_out = (b * T + t) * H;
+        const std::size_t base_in  = b * H;
+        for (std::size_t k = 0; k < H; ++k) {
+          parent->grad[base_in + k] += g[base_out + k];
+        }
+      }
+    }
+  };
+
+  return ag::make_from_node(node);
+}
+
+std::vector<Variable*> LSTM::_parameters() {
+  std::vector<Variable*> ps;
+  for (auto& cell : layers_) {
+    auto sub = cell->parameters();                 // note: use ->parameters()
+    ps.insert(ps.end(), sub.begin(), sub.end());
+  }
+  return ps;
+}
+
 } // namespace ag::nn

@@ -75,4 +75,23 @@ private:
   Variable b_i_, b_f_, b_g_, b_o_;
 };
 
+// lstm.hpp (appended)
+struct LSTM : Module {
+  LSTM(std::size_t input_size, std::size_t hidden_size,
+       int num_layers = 1, bool bias = true);
+
+  // X: [B,T,I] -> Y: [B,T,H]
+  Variable forward(const Variable& X) override;
+
+  std::vector<Variable*> _parameters() override;
+
+private:
+  std::size_t input_size_ = 0, hidden_size_ = 0;
+  int  num_layers_ = 1;
+  bool bias_ = true;
+
+  // one LSTMCell per layer; weights shared across T steps
+  std::vector<std::shared_ptr<LSTMCell>> layers_;
+};
+
 } // namespace ag::nn
