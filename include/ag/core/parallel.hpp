@@ -5,15 +5,18 @@
 #include <cstdlib>
 #include <atomic>
 #include <algorithm>
+#include <exception>
+#include <string>
 
 // Minimal parallel_for utility for AutoCalc
 // - Header-only, no global state required
 // - Spawns up to T threads per call (T from AG_THREADS env or hardware_concurrency)
 // - Falls back to single-thread if nested or if n <= grain
 // - Avoids nested parallelism via a thread_local guard
+// - Exception-safe: captures first exception and rethrows on caller thread after join.
 //
 // Usage:
-//   ag::core::parallel_for(N, 128, [&](std::size_t i0, std::size_t i1){
+//   ag::parallel_for(N, 128, [&](std::size_t i0, std::size_t i1){
 //     for (std::size_t i=i0; i<i1; ++i) { /* work on [i0, i1) */ }
 //   });
 //
@@ -64,7 +67,8 @@ inline void parallel_for(std::size_t n, std::size_t grain, Fn&& fn) {
     return;
   }
 
-  const std::size_t T = std::max<std::size_t>(1, std::min(get_max_threads(), (n + grain - 1) / grain));
+  const std::size_t T = std::max<std::size_t>(
+      1, std::min(get_max_threads(), (n + grain - 1) / grain));
   if (T == 1) {
     bool prev = nesting_flag();
     nesting_flag() = true;
@@ -80,13 +84,19 @@ inline void parallel_for(std::size_t n, std::size_t grain, Fn&& fn) {
   std::vector<std::thread> workers;
   workers.reserve(T > 0 ? T - 1 : 0);
 
-  // Launch T-1 workers, run block 0 on current thread
+  std::atomic<bool> error{false};
+  std::exception_ptr eptr = nullptr;
+
   auto launch_block = [&](std::size_t b){
     const std::size_t i0 = b * base + std::min<std::size_t>(b, rem);
     const std::size_t i1 = i0 + base + (b < rem ? 1 : 0);
     bool prev = nesting_flag();
     nesting_flag() = true;
-    fn(i0, i1);
+    try {
+      fn(i0, i1);
+    } catch (...) {
+      if (!error.exchange(true)) eptr = std::current_exception();
+    }
     nesting_flag() = prev;
   };
 
@@ -97,6 +107,8 @@ inline void parallel_for(std::size_t n, std::size_t grain, Fn&& fn) {
   launch_block(0);
 
   for (auto& th : workers) th.join();
+
+  if (eptr) std::rethrow_exception(eptr);
 }
 
-}
+} // namespace ag
