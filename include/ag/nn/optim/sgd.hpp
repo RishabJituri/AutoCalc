@@ -8,7 +8,7 @@
 #include "ag/nn/module.hpp"
 
 
-namespace ag::optim {
+namespace ag::nn {
 
 struct SGD {
   double lr{0.1};           // <- stronger default helps the test converge

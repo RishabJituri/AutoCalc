@@ -1,7 +1,7 @@
 #include "ag/nn/optim/sgd.hpp"
 #include <algorithm>
 
-namespace ag::optim {
+namespace ag::nn {
 
 void SGD::step(ag::nn::Module& m) {
   auto params = m.parameters();                 // std::vector<ag::Variable*>

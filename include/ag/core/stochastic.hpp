@@ -1,6 +1,6 @@
 
-#ifndef AG_STOCHASTIC_HPP
-#define AG_STOCHASTIC_HPP
+#ifndef AG_CORE_STOCHASTIC_HPP
+#define AG_CORE_STOCHASTIC_HPP
 
 #include <vector>
 #include <cstddef>
@@ -8,6 +8,7 @@
 #include "variables.hpp"
 
 namespace ag {
+
 
 struct SampleOut {
   Variable sample_onehot;  // shape [B,K] or [K], requires_grad=false
@@ -21,7 +22,7 @@ SampleOut CategoricalSample(const Variable& logits, uint64_t seed=123456789ull);
 // Differentiable Gumbel-Softmax (Concrete) relaxation. Returns soft probs of same shape as logits.
 // If 'hard' is true, uses straight-through: hard one-hot in forward, soft in backward.
 Variable GumbelSoftmax(const Variable& logits, double tau=1.0, bool hard=false, uint64_t seed=987654321ull);
-
-} // namespace ag
+}
+ // namespace ag
 
 #endif // AG_STOCHASTIC_HPP

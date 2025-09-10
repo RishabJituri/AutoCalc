@@ -1,4 +1,4 @@
-#include "ag/nn/dropout.hpp"
+#include "ag/nn/layers/dropout.hpp"
 #include "ag/ops/tensor_utils.hpp"
 #include <random>
 #include <memory>

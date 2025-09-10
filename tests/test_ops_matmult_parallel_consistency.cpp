@@ -1,14 +1,14 @@
 #include "test_framework.hpp"
 #include "ag/core/variables.hpp"
 #include "ag/ops/linalg.hpp"
-#include "ag/core/parallel.hpp"
+#include "ag/parallel/parallel_for.hpp"
 #include <vector>
 #include <cmath>
 #include <random>
 
 using ag::Variable;
-using ag::parallel_for;
-using ag::set_max_threads;
+using ag::parallel::parallel_for;
+using ag::parallel::set_max_threads;
 
 static std::vector<double> randu(std::size_t n, double a=-1.0, double b=1.0) {
   std::mt19937 rng(123);

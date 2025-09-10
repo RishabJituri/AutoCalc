@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
 
     // Model + Optimizer
     LSTMNet net(/*input_dim_V=*/V, /*hidden_H=*/HIDDEN, /*layers_L=*/LAYERS, /*dropout_p=*/DROPOUT_P);
-    ag::optim::SGD opt(LR, MOM, /*nesterov=*/true, /*weight_decay=*/5e-4);
+    ag::nn::SGD opt(LR, MOM, /*nesterov=*/true, /*weight_decay=*/5e-4);
     std::cerr << "Begun Training...\n";
     // Training
     double wall_time_s = 0.0;

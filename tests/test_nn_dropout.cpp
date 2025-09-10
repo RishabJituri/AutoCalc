@@ -1,6 +1,6 @@
 #include "test_framework.hpp"
 #include "ag/core/variables.hpp"
-#include "ag/nn/dropout.hpp"
+#include "ag/nn/layers/dropout.hpp"
 #include <vector>
 #include <cmath>
 

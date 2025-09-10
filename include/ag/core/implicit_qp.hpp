@@ -8,6 +8,7 @@
 
 namespace ag {
 
+
 // Solve equality-constrained QP (dense, small):
 //   minimize  1/2 y^T H y + q^T y
 //   subject to A y = b
@@ -16,7 +17,7 @@ namespace ag {
 Variable QPSolveEq(const Variable& H, const Variable& q,
                    const Variable& A, const Variable& b,
                    double eps_pd = 1e-8);
+}
 
-} // namespace ag
 
 #endif // AG_IMPLICIT_QP_HPP

@@ -192,7 +192,7 @@ int main(int argc, char** argv) {
     ag::data::DataLoader test_ld (test_ds,  opts_test);
 
     SimpleCNN net;
-    ag::optim::SGD opt(lr, /*momentum=*/0.9, /*nesterov=*/true, /*weight_decay=*/0.0);
+    ag::nn::SGD opt(lr, /*momentum=*/0.9, /*nesterov=*/true, /*weight_decay=*/0.0);
 
     auto t0 = std::chrono::steady_clock::now();
 

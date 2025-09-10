@@ -1,6 +1,6 @@
 #include "test_framework.hpp"
 #include "ag/core/variables.hpp"
-#include "ag/nn/normalization.hpp"
+#include "ag/nn/layers/normalization.hpp"
 #include <vector>
 #include <cmath>
 

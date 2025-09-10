@@ -1,4 +1,4 @@
-#include "ag/nn/normalization.hpp"
+#include "ag/nn/layers/normalization.hpp"
 #include "ag/ops/tensor_utils.hpp"
 #include <cmath>
 #include <stdexcept>

@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <stdexcept>
 
-namespace ag {
+namespace ag{
 using detail::numel;
 
 // Utilities

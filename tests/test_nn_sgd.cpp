@@ -12,7 +12,7 @@
 
 using ag::Variable;
 using ag::nn::Linear;
-using ag::optim::SGD;
+using ag::nn::SGD;
 using ag::reduce_mean;
 using ag::sub;
 using ag::mul;
