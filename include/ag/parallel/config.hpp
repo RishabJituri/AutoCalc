@@ -29,7 +29,7 @@ inline std::size_t get_max_threads() {
 // ---------- Determinism (env: AG_DETERMINISTIC=1) ----------
 inline std::atomic<int> g_deterministic_cached{-1}; // -1 unknown, 0 off, 1 on
 
-inline bool deterministic_mode() {
+inline bool deterministic() {
 #if defined(AG_PAR_DETERMINISTIC) && AG_PAR_DETERMINISTIC
   return true;
 #else

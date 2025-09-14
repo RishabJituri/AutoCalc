@@ -2,7 +2,7 @@
 #ifndef AG_IMPLICIT_QP_HPP
 #define AG_IMPLICIT_QP_HPP
 
-#include "variables.hpp"
+#include "ag/core/variables.hpp"
 #include <cstddef>
 #include <vector>
 

@@ -2,6 +2,7 @@
 #include "ag/parallel/parallel_for.hpp"
 #include "ag/parallel/config.hpp"
 #include "ag/parallel/transform.hpp"
+#include "ag/parallel/pool.hpp"
 
 #include <vector>
 #include <atomic>
@@ -282,3 +283,5 @@ TEST("for_rows/covers_each_row_once") {
   });
   ASSERT_TRUE(all_marked_once(row_hits));
 }
+
+

@@ -5,7 +5,7 @@
 #include <vector>
 #include <cstddef>
 #include <cstdint>
-#include "variables.hpp"
+#include "ag/core/variables.hpp"
 
 namespace ag {
 

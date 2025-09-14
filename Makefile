@@ -1,4 +1,3 @@
-
 # ===============================================================
 # Toolchain
 # ===============================================================
@@ -57,6 +56,12 @@ TEST_FILES  := $(wildcard tests/*.cpp)
 MNIST_EXAMPLE := examples/mnist_demo.cpp
 LSTM_EXAMPLE  := examples/lstm_shakespeare.cpp
 
+# ---- Sanity pool test (separate tiny exe) ----
+SANE_SRC   := parallel_sanity/sanity_pool.cpp
+SANE_OBJ   := $(OBJ_DIR)/$(SANE_SRC:.cpp=.o)
+SANE_BIN   := $(BUILD_DIR)/sanity_pool
+SANE_DEPS  := $(SANE_OBJ:.o=.d)
+
 # Objects (sanitized)
 OBJS        := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(SRC_FILES)) \
                $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(TEST_FILES))
@@ -71,7 +76,7 @@ FAST_DEPS   := $(FAST_OBJS:.o=.d)
 # ===============================================================
 # Phonies
 # ===============================================================
-.PHONY: all test demo run-demo fast-mnist run-fast-mnist fast-lstm run-fast-lstm clean
+.PHONY: all test demo run-demo fast-mnist run-fast-mnist fast-lstm run-fast-lstm clean sanity-pool run-sanity
 
 all: test fast-mnist fast-lstm
 
@@ -88,6 +93,19 @@ $(TEST_BIN): $(OBJS)
 $(OBJ_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+# ===============================================================
+# Sanity pool (separate tiny exe; sanitized)
+# ===============================================================
+sanity-pool: $(SANE_BIN)
+
+# Link the sanity binary against *src* objects (no tests) + the sanity object
+$(SANE_BIN): $(SANE_OBJ) $(filter $(OBJ_DIR)/src/%,$(OBJS))
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) $(THREAD_LIBS)
+
+run-sanity: sanity-pool
+	./$(SANE_BIN) $(ARGS)
 
 # ===============================================================
 # Debug demo (optional; sanitized)
@@ -138,3 +156,4 @@ clean:
 # ===============================================================
 -include $(DEPS)
 -include $(FAST_DEPS)
+-include $(SANE_DEPS)

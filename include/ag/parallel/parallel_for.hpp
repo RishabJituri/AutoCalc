@@ -24,7 +24,7 @@ inline void parallel_for(std::size_t n, std::size_t grain, Fn&& fn) {
   if (grain == 0) grain = 1;
 
   const bool must_serial =
-      nesting_flag() || serial_override() || deterministic_mode() ||
+      nesting_flag() || serial_override() || deterministic() ||
       (get_max_threads() <= 1) || (n <= grain);
 
   if (must_serial) {

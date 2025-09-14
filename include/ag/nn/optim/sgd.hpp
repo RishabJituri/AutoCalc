@@ -6,6 +6,7 @@
 #include <cstddef>
 #include "ag/core/variables.hpp"
 #include "ag/nn/module.hpp"
+#include <unordered_map>
 
 
 namespace ag::nn {
