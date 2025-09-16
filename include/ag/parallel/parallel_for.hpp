@@ -1,118 +1,101 @@
 #pragma once
+// Pool-backed parallel_for (lazy persistent pool, grain-aware, nested-safe, deterministic)
 #include <cstddef>
-#include <thread>
-#include <vector>
-#include <cstdlib>
-#include <atomic>
 #include <algorithm>
+#include <atomic>
 #include <exception>
-#include <string>
+#include <utility>
+#include <vector>
 
-#include "ag/parallel/config.hpp" // determinism + flags
+#include "ag/parallel/config.hpp"
+#include "ag/parallel/pool.hpp"
 
-// Minimal parallel_for utility for AutoCalc (ag::parallel)
-// - balanced partitioning, nested-parallel guard, exception-safe
-// - determinism: AG_DETERMINISTIC=1 forces serial
-// - AG_THREADS caps threads; override via ag::parallel::set_max_threads
+namespace ag { namespace parallel {
 
-namespace ag::parallel {
-
-// Core API: partition [0, n) into blocks and call fn(i0,i1) per block
+// 1-D parallel_for
 template <class Fn>
-inline void parallel_for(std::size_t n, std::size_t grain, Fn&& fn) {
-  if (n == 0) return;
-  if (grain == 0) grain = 1;
+inline void parallel_for(std::size_t n, std::size_t grain, Fn&& body) {
+  using std::size_t;
 
-  const bool must_serial =
-      nesting_flag() || serial_override() || deterministic() ||
-      (get_max_threads() <= 1) || (n <= grain);
+  const size_t Tcap = ag::parallel::get_max_threads();
+  const size_t T    = std::max<size_t>(1, std::min(Tcap, n));
 
-  if (must_serial) {
-    bool prev = nesting_flag();
-    nesting_flag() = true;
-    fn(0, n);
-    nesting_flag() = prev;
+  // Serial gates (user-forced, deterministic, or nested)
+  if (T == 1 || n == 0 || ag::parallel::serial_override()) {
+    body(0, n);
     return;
   }
 
-  const std::size_t T = std::max<std::size_t>(
-      1, std::min(get_max_threads(), (n + grain - 1) / grain));
+  // Determine number of chunks
+  const size_t chunks = (grain == 0)
+      ? T
+      : std::max<size_t>(1, std::min(T, (n + grain - 1) / grain));
 
-  if (T == 1) {
-    bool prev = nesting_flag();
-    nesting_flag() = true;
-    fn(0, n);
-    nesting_flag() = prev;
+  if (chunks == 1) {
+    body(0, n);
     return;
   }
 
-  const std::size_t base = n / T;
-  const std::size_t rem  = n % T;
-
-  std::vector<std::thread> workers;
-  workers.reserve(T > 0 ? T - 1 : 0);
-
-  std::atomic<bool> error{false};
-  std::exception_ptr eptr = nullptr;
-
-  auto launch_block = [&](std::size_t b){
-    const std::size_t i0 = b * base + std::min<std::size_t>(b, rem);
-    const std::size_t i1 = i0 + base + (b < rem ? 1 : 0);
-    bool prev = nesting_flag();
-    nesting_flag() = true;
-    try {
-      fn(i0, i1);
-    } catch (...) {
-      if (!error.exchange(true)) eptr = std::current_exception();
-    }
-    nesting_flag() = prev;
+  auto k_block = [&](size_t k)->std::pair<size_t,size_t> {
+    const size_t q = n / chunks, r = n % chunks;
+    const size_t lo = k * q + (k < r ? k : r);
+    return {lo, lo + q + (k < r)};
   };
 
-  for (std::size_t b = 1; b < T; ++b) {
-    workers.emplace_back([&, b]{ launch_block(b); });
+  std::exception_ptr first_ep = nullptr;
+  std::atomic<bool> seen_ep{false};
+
+  for (size_t k = 0; k < chunks; ++k) {
+    auto range = k_block(k);
+    const std::size_t lo = range.first;
+    const std::size_t hi = range.second;
+
+    ag::parallel::submit_range(lo, hi, [&](std::size_t i0, std::size_t i1){
+      ag::parallel::NestedParallelGuard _nested; // inner PF runs serial
+      try {
+        if (i1 > i0) body(i0, i1);
+      } catch (...) {
+        if (!seen_ep.exchange(true, std::memory_order_relaxed)) {
+          first_ep = std::current_exception();
+        }
+      }
+    });
   }
-  // Current thread does block 0
-  launch_block(0);
 
-  for (auto& th : workers) th.join();
-
-  if (eptr) std::rethrow_exception(eptr);
+  ag::parallel::wait_for_all();
+  if (first_ep) std::rethrow_exception(first_ep);
 }
 
-// Convenience overload: choose a sensible grain automatically
+// Overload: grain defaults to 0 (auto)
 template <class Fn>
-inline void parallel_for(std::size_t n, Fn&& fn) {
-  if (n == 0) return;
-  // ~8 chunks per thread heuristic
-  const std::size_t Tthr = std::max<std::size_t>(1, std::min(get_max_threads(), n));
-  const std::size_t grain = std::max<std::size_t>(1, n / (Tthr * 8));
-  parallel_for(n, grain, std::forward<Fn>(fn));
+inline void parallel_for(std::size_t n, Fn&& body) {
+  parallel_for(n, /*grain=*/0, std::forward<Fn>(body));
 }
 
-// 2D tiler for later linalg/conv: fn(h0,h1,w0,w1)
-template <class Fn>
+// 2-D tiling helper
+template <class Fn2D>
 inline void parallel_for_2d(std::size_t H, std::size_t W,
                             std::size_t tileH, std::size_t tileW,
-                            Fn&& fn) {
+                            Fn2D&& body) {
   if (H == 0 || W == 0) return;
-  tileH = tileH ? tileH : 1;
-  tileW = tileW ? tileW : 1;
+  if (tileH == 0) tileH = H;
+  if (tileW == 0) tileW = W;
 
-  const std::size_t nTH = (H + tileH - 1) / tileH;
-  const std::size_t nTW = (W + tileW - 1) / tileW;
-  const std::size_t total = nTH * nTW;
+  const std::size_t th = (H + tileH - 1) / tileH;
+  const std::size_t tw = (W + tileW - 1) / tileW;
+  const std::size_t total = th * tw;
 
-  parallel_for(total, [&](std::size_t i0, std::size_t i1){
-    for (std::size_t t = i0; t < i1; ++t) {
-      const std::size_t th = t / nTW;
-      const std::size_t tw = t % nTW;
-      const std::size_t h0 = th * tileH;
-      const std::size_t w0 = tw * tileW;
-      const std::size_t h1 = (h0 + tileH < H) ? (h0 + tileH) : H;
-      const std::size_t w1 = (w0 + tileW < W) ? (w0 + tileW) : W;
-      fn(h0, h1, w0, w1);
+  parallel_for(total, /*grain=*/0, [&](std::size_t t0, std::size_t t1){
+    for (std::size_t t = t0; t < t1; ++t) {
+      const std::size_t ih = t / tw;
+      const std::size_t iw = t % tw;
+      const std::size_t h0 = ih * tileH;
+      const std::size_t h1 = std::min(h0 + tileH, H);
+      const std::size_t w0 = iw * tileW;
+      const std::size_t w1 = std::min(w0 + tileW, W);
+      body(h0, h1, w0, w1);
     }
   });
 }
 
-} // namespace ag::parallel
+}} // namespace ag::parallel

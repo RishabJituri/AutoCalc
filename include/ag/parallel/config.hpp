@@ -1,71 +1,93 @@
 #pragma once
+#include <atomic>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
-#include <atomic>
+#include <algorithm>
 
-namespace ag::parallel {
+namespace ag { namespace parallel {
 
-// ---------- Thread cap (env: AG_THREADS, or override via API) ----------
-inline std::size_t& max_threads_override() {
-  static std::size_t v = 0; // 0 => auto
-  return v;
+// ---------- Thread cap (definition) ----------
+// Global max-threads knob with sane default and ENV override.
+// Tests call set_max_threads(...); callers read get_max_threads().
+inline std::atomic<std::size_t>& _threads_cap() {
+  static std::atomic<std::size_t> cap{[]{
+    // default: clamp env AG_THREADS or hardware_concurrency() to at least 1
+    auto env = std::getenv("AG_THREADS");
+    std::size_t hw = std::max<std::size_t>(1, std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 4);
+    if (!env) return hw;
+    // parse env
+    std::size_t v = 0;
+    for (const char* p = env; *p; ++p) {
+      if (*p < '0' || *p > '9') { v = hw; break; }
+      v = v * 10 + std::size_t(*p - '0');
+    }
+    if (v == 0) v = 1;
+    return v;
+  }()};
+  return cap;
 }
-inline void set_max_threads(std::size_t t) { max_threads_override() = t; }
-
+inline void set_max_threads(std::size_t n) {
+  if (n == 0) n = 1;
+  _threads_cap().store(n, std::memory_order_relaxed);
+}
 inline std::size_t get_max_threads() {
-  std::size_t t = max_threads_override();
-  if (t) return t;
-  if (const char* env = std::getenv("AG_THREADS")) {
-    try {
-      std::size_t from_env = static_cast<std::size_t>(std::stoul(env));
-      if (from_env) return from_env;
-    } catch (...) {}
-  }
-  unsigned hw = std::thread::hardware_concurrency();
-  return hw ? static_cast<std::size_t>(hw) : static_cast<std::size_t>(4);
+  return _threads_cap().load(std::memory_order_relaxed);
 }
 
-// ---------- Determinism (env: AG_DETERMINISTIC=1) ----------
-inline std::atomic<int> g_deterministic_cached{-1}; // -1 unknown, 0 off, 1 on
-
-inline bool deterministic() {
-#if defined(AG_PAR_DETERMINISTIC) && AG_PAR_DETERMINISTIC
-  return true;
-#else
-  int c = g_deterministic_cached.load(std::memory_order_relaxed);
-  if (c < 0) {
-    const char* e = std::getenv("AG_DETERMINISTIC");
-    c = (e && *e && *e != '0') ? 1 : 0;
-    g_deterministic_cached.store(c, std::memory_order_relaxed);
-  }
-  return c == 1;
-#endif
-}
-
-inline void set_deterministic(bool on) {
-#if defined(AG_PAR_DETERMINISTIC) && AG_PAR_DETERMINISTIC
-  (void)on;
-#else
-  g_deterministic_cached.store(on ? 1 : 0, std::memory_order_relaxed);
-#endif
-}
-
-// ---------- Scoped serial override (force single-thread within a scope) ----------
-inline int& serial_depth_flag() {
-  static thread_local int depth = 0;
-  return depth;
-}
+// ---------- ScopedSerial (public knob; TLS depth) ----------
 struct ScopedSerial {
-  ScopedSerial() { ++serial_depth_flag(); }
-  ~ScopedSerial() { --serial_depth_flag(); }
+  ScopedSerial(){ ++depth_ref(); }
+  ~ScopedSerial(){ --depth_ref(); }
+  ScopedSerial(const ScopedSerial&) = delete;
+  ScopedSerial& operator=(const ScopedSerial&) = delete;
+  static int depth(){ return depth_ref(); }
+private:
+  static  int& depth_ref(){ static thread_local int d = 0; return d; }
 };
-inline bool serial_override() { return serial_depth_flag() > 0; }
 
-// ---------- Nested-parallelism guard ----------
-inline bool& nesting_flag() {
-  static thread_local bool v = false;
+// ---------- Nested guard expected by pool.hpp ----------
+inline bool& nesting_flag() { static thread_local bool f = false; return f; }
+struct NestedParallelGuard {
+  NestedParallelGuard(){ nesting_flag() = true; }
+  ~NestedParallelGuard(){ nesting_flag() = false; }
+  NestedParallelGuard(const NestedParallelGuard&) = delete;
+  NestedParallelGuard& operator=(const NestedParallelGuard&) = delete;
+  static bool active(){ return nesting_flag(); }
+};
+
+// ---------- Determinism (env + runtime) ----------
+inline bool _env_bool(const char* name, bool def=false) {
+  if (const char* s = std::getenv(name)) {
+    if (!std::strcmp(s,"1") || !std::strcmp(s,"true") || !std::strcmp(s,"TRUE")) return true;
+    if (!std::strcmp(s,"0") || !std::strcmp(s,"false")|| !std::strcmp(s,"FALSE")) return false;
+  }
+  return def;
+}
+inline std::atomic<bool>& deterministic_flag() {
+  static std::atomic<bool> v{ _env_bool("AG_DETERMINISTIC", false) };
   return v;
 }
+inline void set_deterministic(bool on) {
+  deterministic_flag().store(on, std::memory_order_relaxed);
+}
+inline bool deterministic_enabled() {
+  const bool env_now = _env_bool("AG_DETERMINISTIC", deterministic_flag().load(std::memory_order_relaxed));
+  if (env_now != deterministic_flag().load(std::memory_order_relaxed)) {
+    deterministic_flag().store(env_now, std::memory_order_relaxed);
+  }
+  return env_now;
+}
 
-} // namespace ag::parallel
+// ---------- Unified serial gate ----------
+inline bool serial_override() {
+  // Treat max_threads==1 as serial; parallel_for also checks T==1.
+  const bool max1 = get_max_threads() <= 1;
+  return ScopedSerial::depth() > 0
+      || nesting_flag()
+      || deterministic_enabled()
+      || max1;
+}
+
+}} // namespace ag::parallel
