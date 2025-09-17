@@ -16,7 +16,7 @@ namespace ag {
 // Returns y* as a Variable. Backward uses implicit differentiation (KKT) to produce grads for H,q,A,b.
 Variable QPSolveEq(const Variable& H, const Variable& q,
                    const Variable& A, const Variable& b,
-                   double eps_pd = 1e-8);
+                   float eps_pd = 1e-8);
 }
 
 

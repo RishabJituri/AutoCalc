@@ -13,21 +13,21 @@ int main() {
         try {
             test.fn();
             auto end = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> elapsed = end - start;
+            std::chrono::duration<float> elapsed = end - start;
             std::cout << "[       OK ] " << test.name << " (" << elapsed.count() << "s)" << std::endl;
             ++passed;
         } catch (const tfw::Failure& e) {
             auto end = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> elapsed = end - start;
+            std::chrono::duration<float> elapsed = end - start;
             std::cout << e.what() << std::endl;
             std::cout << "[  FAILED  ] " << test.name << " (" << elapsed.count() << "s)" << std::endl;
         } catch (const std::exception& e) {
             auto end = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> elapsed = end - start;
+            std::chrono::duration<float> elapsed = end - start;
             std::cout << "[  EXCEPTION  ] " << test.name << ": " << e.what() << " (" << elapsed.count() << "s)" << std::endl;
         } catch (...) {
             auto end = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> elapsed = end - start;
+            std::chrono::duration<float> elapsed = end - start;
             std::cout << "[  UNKNOWN EXCEPTION  ] " << test.name << " (" << elapsed.count() << "s)" << std::endl;
         }
     }

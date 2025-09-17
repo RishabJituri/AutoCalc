@@ -8,8 +8,8 @@ namespace ag::nn {
 // BatchNorm2d over NCHW: per-channel mean/var over N*H*W
 struct BatchNorm2d : Module {
   std::size_t C;
-  double eps;
-  double momentum;
+  float eps;
+  float momentum;
 
   // Learnable scale/shift
   Variable gamma; // [C], requires_grad = true
@@ -19,7 +19,7 @@ struct BatchNorm2d : Module {
   Variable running_mean; // [C], requires_grad = false
   Variable running_var;  // [C], requires_grad = false
 
-  BatchNorm2d(std::size_t C, double eps=1e-5, double momentum=0.1);
+  BatchNorm2d(std::size_t C, float eps=1e-5, float momentum=0.1);
 
   Variable forward(const Variable& x) override;
 

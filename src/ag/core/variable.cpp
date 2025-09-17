@@ -23,7 +23,7 @@ using detail::numel;
 Variable::Variable() : n(std::make_shared<Node>()) {}
 Variable::Variable(std::shared_ptr<Node> node) : n(std::move(node)) {}
 
-Variable::Variable(const std::vector<double>& value,
+Variable::Variable(const std::vector<float>& value,
                    const std::vector<std::size_t>& shape,
                    bool requires_grad) {
   if (numel(shape) != value.size()) throw std::invalid_argument("value size != numel(shape)");
@@ -34,8 +34,8 @@ Variable::Variable(const std::vector<double>& value,
   n->grad.assign(value.size(), 0.0);
 }
 
-const std::vector<double>& Variable::value() const { return n->value; }
-const std::vector<double>& Variable::grad()  const { return n->grad;  }
+const std::vector<float>& Variable::value() const { return n->value; }
+const std::vector<float>& Variable::grad()  const { return n->grad;  }
 const std::vector<std::size_t>& Variable::shape() const { return n->shape; }
 bool Variable::requires_grad() const { return n->requires_grad; }
 
@@ -51,10 +51,10 @@ void Variable::zero_grad() {
 void Variable::backward() {
   if (numel(n->shape) != 1)
     throw std::invalid_argument("Non-scalar output: pass seed to backward(seed)");
-  backward(std::vector<double>{1.0});
+  backward(std::vector<float>{1.0});
 }
 
-void Variable::backward(const std::vector<double>& seed) {
+void Variable::backward(const std::vector<float>& seed) {
   std::vector<std::shared_ptr<Node>> order;
   std::unordered_set<Node*> seen;
   topo_collect(n, order, seen);

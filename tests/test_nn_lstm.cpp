@@ -12,8 +12,8 @@ using ag::Variable;
 using ag::nn::LSTMCell;
 using ag::nn::LSTM;
 
-static std::vector<double> zeros(std::size_t n) { return std::vector<double>(n, 0.0); }
-static std::vector<double> ones(std::size_t n)  { return std::vector<double>(n, 1.0); }
+static std::vector<float> zeros(std::size_t n) { return std::vector<float>(n, 0.0f); }
+static std::vector<float> ones(std::size_t n)  { return std::vector<float>(n, 1.0f); }
 
 TEST("nn/lstm/shape_and_params") {
     const std::size_t I=3, H=4, B=2;
@@ -35,18 +35,18 @@ TEST("nn/lstm/numeric_grad_single_step_sum") {
     LSTMCell lstm(I, H, /*bias=*/true, /*init_scale=*/0.05, /*seed=*/1234ull);
 
     // Input and initial states
-    std::vector<double> xv = {0.1, -0.2};
+    std::vector<float> xv = {0.1f, -0.2f};
     Variable x(xv, {B,I}, /*requires_grad=*/true);
     Variable h0(zeros(B*H), {B,H}, /*requires_grad=*/true);
     Variable c0(zeros(B*H), {B,H}, /*requires_grad=*/true);
 
     auto [h1, c1] = lstm.forward_step(x,h0,c0);
     // Loss = sum(h1)
-    double sumv = 0.0; for (double v : h1.value()) sumv += v;
+    float sumv = 0.0f; for (float v : h1.value()) sumv += v;
     h1.backward(ones(h1.value().size()));
 
     // Finite difference on a couple of x entries
-    const double eps = 1e-6;
+    const float eps = 1e-4f;
     for (std::size_t i=0;i<xv.size();++i) {
         auto xp = xv; xp[i] += eps;
         auto xm = xv; xm[i] -= eps;
@@ -54,11 +54,11 @@ TEST("nn/lstm/numeric_grad_single_step_sum") {
         Variable Xm(xm, {B,I}, /*requires_grad=*/false);
         auto hp = lstm.forward_step(Xp,h0,c0).first;
         auto hm = lstm.forward_step(Xm,h0,c0).first;
-        double fp = 0.0, fm = 0.0;
-        for (double v : hp.value()) fp += v;
-        for (double v : hm.value()) fm += v;
-        double gnum = (fp - fm) / (2*eps);
-        ASSERT_NEAR(x.grad()[i], gnum, 1e-4);
+        float fp = 0.0f, fm = 0.0f;
+        for (float v : hp.value()) fp += v;
+        for (float v : hm.value()) fm += v;
+        float gnum = (fp - fm) / (2*eps);
+        ASSERT_NEAR(x.grad()[i], gnum, 1e-3f);
     }
 }
 
@@ -69,8 +69,8 @@ TEST("nn/lstm/unrolled_three_steps_determinism") {
     // sequence x_t
     std::vector<Variable> xs;
     for (std::size_t t=0;t<T;++t) {
-        std::vector<double> xv(B*I);
-        for (std::size_t i=0;i<xv.size();++i) xv[i] = double(i + 1 + t)*0.1;
+        std::vector<float> xv(B*I);
+        for (std::size_t i=0;i<xv.size();++i) xv[i] = float(i + 1 + t)*0.1f;
         xs.emplace_back(Variable(xv, {B,I}, /*requires_grad=*/true));
     }
     Variable h(zeros(B*H), {B,H}, /*requires_grad=*/true);
@@ -103,18 +103,18 @@ TEST("nn/lstm/unrolled_three_steps_determinism") {
     // grads on xs[0] should match (deterministic recompute)
     auto g2 = xs[0].grad();
     ASSERT_TRUE(g1.size() == g2.size());
-    for (std::size_t i=0;i<g1.size();++i) ASSERT_NEAR(g1[i], g2[i], 1e-9);
+    for (std::size_t i=0;i<g1.size();++i) ASSERT_NEAR(g1[i], g2[i], 1e-6f);
 }
 
 TEST("nn/lstm/shape_forward_and_backward") {
   const std::size_t B = 2, T = 3, I = 4, H = 5;
 
   // Build X:[B,T,I]
-  std::vector<double> x(B * T * I);
+  std::vector<float> x(B * T * I);
   for (std::size_t b = 0; b < B; ++b)
     for (std::size_t t = 0; t < T; ++t)
       for (std::size_t i = 0; i < I; ++i)
-        x[(b*T + t)*I + i] = 0.01 * double((b+1)*(t+1)*(i+1));
+        x[(b*T + t)*I + i] = 0.01f * float((b+1)*(t+1)*(i+1));
 
   Variable X(x, {B, T, I}, /*requires_grad=*/false);
 
@@ -131,7 +131,7 @@ TEST("nn/lstm/shape_forward_and_backward") {
   ASSERT_TRUE(yv.size() == B * T * H);
 
   // Backprop sanity: seed with ones and ensure it runs
-  std::vector<double> seed(yv.size(), 1.0);
+  std::vector<float> seed(yv.size(), 1.0f);
   Y.backward(seed);   // passes if no throw/crash
 }
 
@@ -139,7 +139,7 @@ TEST("nn/lstm/input_size_mismatch_throws") {
   const std::size_t B = 1, T = 2, I = 3, H = 4;
 
   // Wrong last dim (I+1) to provoke a clear error
-  std::vector<double> x(B * T * (I + 1), 0.0);
+  std::vector<float> x(B * T * (I + 1), 0.0f);
   Variable X_bad(x, {B, T, I + 1}, /*requires_grad=*/false);
 
   LSTM lstm(I, H, /*num_layers=*/1, /*bias=*/true);
@@ -156,7 +156,7 @@ TEST("nn/lstm/input_size_mismatch_throws") {
 TEST("nn/lstm/multilayer_shape") {
   const std::size_t B = 2, T = 4, I = 3, H = 6;
 
-  std::vector<double> x(B * T * I, 0.0);
+  std::vector<float> x(B * T * I, 0.0f);
   Variable X(x, {B, T, I}, /*requires_grad=*/false);
 
   LSTM lstm(I, H, /*num_layers=*/2, /*bias=*/true);

@@ -22,7 +22,7 @@ namespace ag::nn {
 class Linear : public Module {
 public:
   Linear(std::size_t in_features, std::size_t out_features, bool bias = true,
-         double init_scale = 0.02, unsigned long long seed = 0xC0FFEE)
+         float init_scale = 0.02, unsigned long long seed = 0xC0FFEE)
   : in_features_(in_features), out_features_(out_features), bias_(bias) {
     init_params_(init_scale, seed);
   }
@@ -43,19 +43,19 @@ protected:
 
 private:
   // Create a learnable parameter Variable with the given data/shape
-  static Variable make_param_(const std::vector<double>& data,
+  static Variable make_param_(const std::vector<float>& data,
                               const std::vector<std::size_t>& shape) {
-    // Variable(vec<double>, vec<size_t>, requires_grad)
+    // Variable(vec<float>, vec<size_t>, requires_grad)
     return Variable(data, shape, /*requires_grad=*/true);
   }
 
-  void init_params_(double scale, unsigned long long seed);
+  void init_params_(float scale, unsigned long long seed);
 
   // Helper to fill a vector with U(-scale, scale)
-  static std::vector<double> randu_(std::size_t n, double scale, unsigned long long seed) {
+  static std::vector<float> randu_(std::size_t n, float scale, unsigned long long seed) {
     std::mt19937_64 rng(seed);
-    std::uniform_real_distribution<double> dist(-scale, scale);
-    std::vector<double> v(n);
+    std::uniform_real_distribution<float> dist(-scale, scale);
+    std::vector<float> v(n);
     for (auto& t : v) t = dist(rng);
     return v;
   }

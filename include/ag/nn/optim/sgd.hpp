@@ -12,15 +12,15 @@
 namespace ag::nn {
 
 struct SGD {
-  double lr{0.1};           // <- stronger default helps the test converge
-  double momentum{0.0};
+  float lr{0.1f};           // <- stronger default helps the test converge
+  float momentum{0.0f};
   bool   nesterov{false};
-  double weight_decay{0.0};
+  float weight_decay{0.0f};
 
   // velocity per parameter (by Node* identity)
-  std::unordered_map<ag::Node*, std::vector<double>> velocity;
+  std::unordered_map<ag::Node*, std::vector<float>> velocity;
 
-  SGD(double lr=0.1, double momentum=0.0, bool nesterov=false, double weight_decay=0.0)
+  SGD(float lr=0.1f, float momentum=0.0f, bool nesterov=false, float weight_decay=0.0f)
     : lr(lr), momentum(momentum), nesterov(nesterov), weight_decay(weight_decay) {}
 
   void step(ag::nn::Module& m);

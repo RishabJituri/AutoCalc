@@ -114,22 +114,22 @@ struct MnistDataset : ag::data::Dataset {
 
     ag::data::Example get(std::size_t i) const override {
         const std::size_t img = X.H * X.W;
-        std::vector<double> v; v.reserve(img);
+        std::vector<float> v; v.reserve(img);
         const std::size_t off = i * img;
-        for (std::size_t j = 0; j < img; ++j) v.push_back(double(X.data[off + j]) / 255.0);
+        for (std::size_t j = 0; j < img; ++j) v.push_back(float(X.data[off + j]) / 255.0);
 
         // x shape [1, H, W]; DataLoader will stack to [B, 1, H, W]
         ag::Variable x{std::move(v), {1, X.H, X.W}, /*requires_grad=*/false};
 
         // y as a 1-element variable so DataLoader stacks to [B]
-        ag::Variable yv{std::vector<double>{ double(y[i]) }, {1}, /*requires_grad=*/false};
+        ag::Variable yv{std::vector<float>{ float(y[i]) }, {1}, /*requires_grad=*/false};
         return {std::move(x), std::move(yv)};
     }
 };
 
 // Convert a batched label Variable [B] -> vector<size_t> for cross_entropy
 static std::vector<std::size_t> to_index_vec(const ag::Variable& ybat) {
-    const auto& v = ybat.value(); // doubles
+    const auto& v = ybat.value(); // floats
     std::vector<std::size_t> out(v.size());
     for (std::size_t i = 0; i < v.size(); ++i) out[i] = static_cast<std::size_t>(v[i]);
     return out;
@@ -163,7 +163,7 @@ int main(int argc, char** argv) {
     fs::path data_dir = "Data";
     int epochs = 2;
     int batch = 128;
-    double lr = 0.1;
+    float lr = 0.1;
 
     for (int i = 1; i < argc; ++i) {
         std::string a(argv[i]);
@@ -202,7 +202,7 @@ int main(int argc, char** argv) {
     for (int ep = 0; ep < epochs; ++ep) {
         // train_ld.reset();  // uncomment if your loader needs an explicit reset
 
-        double running_loss_sum = 0.0;
+        float running_loss_sum = 0.0;
         std::size_t running_count = 0;
 
         while (train_ld.has_next()) {
@@ -221,9 +221,9 @@ int main(int argc, char** argv) {
 
             // update running average weighted by batch size
             const std::size_t B = targets.size();
-            running_loss_sum += loss.value()[0] * double(B);
+            running_loss_sum += loss.value()[0] * float(B);
             running_count    += B;
-            const double avg = running_count ? (running_loss_sum / double(running_count)) : 0.0;
+            const float avg = running_count ? (running_loss_sum / float(running_count)) : 0.0;
 
             std::cout << "[train] epoch " << (ep+1) << "/" << epochs
                     << " step " << (++tstep)
@@ -253,7 +253,7 @@ int main(int argc, char** argv) {
         const std::size_t B = targets.size(), C = 10;
         for (std::size_t i = 0; i < B; ++i) {
             std::size_t base = i * C, arg = 0;
-            double best = z[base];
+            float best = z[base];
             for (std::size_t c = 1; c < C; ++c)
                 if (z[base+c] > best) { best = z[base+c]; arg = c; }
             if (arg == targets[i]) ++correct;
@@ -263,9 +263,9 @@ int main(int argc, char** argv) {
     // test_ld.rewind();  // (optional; only if your API provides it)
 
 
-    double acc = total ? (100.0 * double(correct) / double(total)) : 0.0;
+    float acc = total ? (100.0 * float(correct) / float(total)) : 0.0;
     auto t1 = std::chrono::steady_clock::now();
-    double seconds = std::chrono::duration<double>(t1 - t0).count();
+    float seconds = std::chrono::duration<float>(t1 - t0).count();
 
     std::ofstream out("results_mnist.txt", std::ios::app);
     out << "Timestamp: " << now_string() << "\n"

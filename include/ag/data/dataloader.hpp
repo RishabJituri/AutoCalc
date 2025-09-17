@@ -54,8 +54,8 @@ inline Batch collate(const std::vector<Example>& samples) {
   std::vector<std::size_t> bx; bx.reserve(xshape0.size()+1); bx.push_back(N); bx.insert(bx.end(), xshape0.begin(), xshape0.end());
   std::vector<std::size_t> by; by.reserve(yshape0.size()+1); by.push_back(N); by.insert(by.end(), yshape0.begin(), yshape0.end());
 
-  std::vector<double> xv; xv.reserve(N * x_per);
-  std::vector<double> yv; yv.reserve(N * y_per);
+  std::vector<float> xv; xv.reserve(N * x_per);
+  std::vector<float> yv; yv.reserve(N * y_per);
   for (const auto& s : samples) {
     const auto& vx = s.x.value(); xv.insert(xv.end(), vx.begin(), vx.end());
     const auto& vy = s.y.value(); yv.insert(yv.end(), vy.begin(), vy.end());

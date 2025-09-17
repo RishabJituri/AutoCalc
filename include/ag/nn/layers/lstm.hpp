@@ -25,7 +25,7 @@ struct LSTMCell : public Module {
   LSTMCell(std::size_t input_size,
            std::size_t hidden_size,
            bool bias = true,
-           double init_scale = 0.02,
+           float init_scale = 0.02,
            unsigned long long seed = 0xABCD1234ULL)
   : input_size_(input_size), hidden_size_(hidden_size), bias_(bias) {
     init_params_(init_scale, seed);
@@ -48,19 +48,19 @@ protected:
   std::vector<Variable*> _parameters() override;
 
 private:
-  static Variable make_param_(const std::vector<double>& data,
+  static Variable make_param_(const std::vector<float>& data,
                               const std::vector<std::size_t>& shape) {
     return Variable(data, shape, /*requires_grad=*/true);
   }
-  static std::vector<double> randu_(std::size_t n, double scale, unsigned long long seed) {
+  static std::vector<float> randu_(std::size_t n, float scale, unsigned long long seed) {
     std::mt19937_64 rng(seed);
-    std::uniform_real_distribution<double> dist(-scale, scale);
-    std::vector<double> v(n);
+    std::uniform_real_distribution<float> dist(-scale, scale);
+    std::vector<float> v(n);
     for (auto& t : v) t = dist(rng);
     return v;
   }
 
-  void init_params_(double scale, unsigned long long seed);
+  void init_params_(float scale, unsigned long long seed);
 
   std::size_t input_size_ = 0;
   std::size_t hidden_size_ = 0;

@@ -14,3 +14,31 @@ Timestamp: 2025-09-09 21:05:04
 Wall time (s): 84.837
 Test accuracy (%): 95.94
 ---
+Timestamp: 2025-09-16 22:15:24
+Wall time (s): 84.758
+Test accuracy (%): 96.00
+---
+Timestamp: 2025-09-16 22:44:16
+Wall time (s): 83.274
+Test accuracy (%): 96.00
+---
+Timestamp: 2025-09-16 22:47:42
+Wall time (s): 83.191
+Test accuracy (%): 96.00
+---
+Timestamp: 2025-09-16 23:25:16
+Wall time (s): 74.494
+Test accuracy (%): 10.10
+---
+Timestamp: 2025-09-17 12:37:42
+Wall time (s): 76.439
+Test accuracy (%): 10.10
+---
+Timestamp: 2025-09-17 16:50:02
+Wall time (s): 77.000
+Test accuracy (%): 95.75
+---
+Timestamp: 2025-09-17 16:59:17
+Wall time (s): 74.507
+Test accuracy (%): 95.75
+---

@@ -86,8 +86,8 @@ Variable reduce_sum(const Variable& X, const std::vector<int>& axes_in, bool kee
 
   auto out = std::make_shared<Node>();
   out->shape = out_shape;
-  out->value.assign(outN, 0.0);
-  out->grad.assign(outN, 0.0);
+  out->value.assign(outN, 0.0f);
+  out->grad.assign(outN, 0.0f);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 
@@ -108,7 +108,7 @@ Variable reduce_sum(const Variable& X, const std::vector<int>& axes_in, bool kee
         auto idx = unravel_index(lin, shp);
         auto cidx = collapsed_index(idx, axes, keepdims);
         auto olin = ravel_index(cidx, out_strides);
-        x->grad[lin] += o->grad[olin]; // d(sum)/dx = 1
+        x->grad[lin] += static_cast<float>(o->grad[olin]); // d(sum)/dx = 1
       }
     }
   };
@@ -126,14 +126,14 @@ Variable reduce_mean(const Variable& X, const std::vector<int>& axes_in, bool ke
   for (auto a : axes) red_count *= shp[a];
 
   auto Y = reduce_sum(X, axes_in, keepdims);
-  for (auto& v : Y.n->value) v /= double(red_count);
+  for (auto& v : Y.n->value) v /= float(red_count);
 
   // Backward: scale incoming grad by 1/red_count before reuse of sum backward
   std::weak_ptr<Node> yw = Y.n;
   auto prev_backward = Y.n->backward;
   Y.n->backward = [yw, prev_backward, red_count]() {
     auto y = yw.lock(); if (!y) return;
-    const double scale = 1.0 / double(red_count);
+    const float scale = 1.0f / float(red_count);
     for (auto& g : y->grad) g *= scale;
     if (prev_backward) prev_backward();
   };
@@ -154,8 +154,8 @@ Variable broadcast_to(const Variable& X, const std::vector<std::size_t>& out_sha
   const auto outN = numel(out_shape);
   auto out = std::make_shared<Node>();
   out->shape = out_shape;
-  out->value.assign(outN, 0.0);
-  out->grad.assign(outN, 0.0);
+  out->value.assign(outN, 0.0f);
+  out->grad.assign(outN, 0.0f);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 

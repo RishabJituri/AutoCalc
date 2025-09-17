@@ -58,8 +58,8 @@ Variable reduce_max(const Variable& X, const std::vector<int>& axes_in, bool kee
   // Iterate all elements and compute max per reduced group
   auto out = std::make_shared<Node>();
   out->shape = out_shape;
-  out->value.assign(numel(out_shape), -std::numeric_limits<double>::infinity());
-  out->grad.assign(numel(out_shape), 0.0);
+  out->value.assign(numel(out_shape), -std::numeric_limits<float>::infinity());
+  out->grad.assign(numel(out_shape), 0.0f);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 
@@ -87,13 +87,12 @@ Variable reduce_max(const Variable& X, const std::vector<int>& axes_in, bool kee
   for (std::size_t lin=0; lin<numel(shp); ++lin) {
     auto idx = unravel_index(lin, shp);
     std::size_t oi = map_out_index(idx);
-    double v = X.n->value[lin];
+    float v = X.n->value[lin];
     if (v > out->value[oi]) out->value[oi] = v;
   }
 
   // backward
-  // backward
-out->backward = [Xn = X.n, shp, out_shape, axes, ostr,
+  out->backward = [Xn = X.n, shp, out_shape, axes, ostr,
                  oweak = std::weak_ptr<ag::Node>(out)]() {
   auto op = oweak.lock(); if (!op) return;
   ag::Node* o = op.get();
@@ -118,7 +117,7 @@ out->backward = [Xn = X.n, shp, out_shape, axes, ostr,
   for (std::size_t lin = 0; lin < numel(shp); ++lin) {
     auto idx = unravel_index(lin, shp);
     std::size_t oi = map_out_index(idx);
-    double m = o->value[oi];
+    float m = o->value[oi];
 
     // count ties in this group
     std::size_t ties = 0;
@@ -129,7 +128,7 @@ out->backward = [Xn = X.n, shp, out_shape, axes, ostr,
       }
     }
     if (ties > 0 && Xn->value[lin] == m) {
-      Xn->grad[lin] += o->grad[oi] / double(ties);
+      Xn->grad[lin] += o->grad[oi] / float(ties);
     }
   }
 };
@@ -174,10 +173,10 @@ std::vector<std::size_t> argmax_lastdim(const Variable& X) {
   std::size_t C = shp.back();
   std::vector<std::size_t> out(B, 0);
   for (std::size_t b=0; b<B; ++b) {
-    double best = -1e300;
+    float best = -1e30f;
     std::size_t idx = 0;
     for (std::size_t c=0; c<C; ++c) {
-      double v = X.n->value[b*C + c];
+      float v = X.n->value[b*C + c];
       if (v > best) { best = v; idx = c; }
     }
     out[b] = idx;

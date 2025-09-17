@@ -72,30 +72,30 @@ inline void parallel_for(std::size_t n, Fn&& body) {
   parallel_for(n, /*grain=*/0, std::forward<Fn>(body));
 }
 
-// 2-D tiling helper
-template <class Fn2D>
-inline void parallel_for_2d(std::size_t H, std::size_t W,
-                            std::size_t tileH, std::size_t tileW,
-                            Fn2D&& body) {
-  if (H == 0 || W == 0) return;
-  if (tileH == 0) tileH = H;
-  if (tileW == 0) tileW = W;
+// // 2-D tiling helper
+// template <class Fn2D>
+// inline void parallel_for_2d(std::size_t H, std::size_t W,
+//                             std::size_t tileH, std::size_t tileW,
+//                             Fn2D&& body) {
+//   if (H == 0 || W == 0) return;
+//   if (tileH == 0) tileH = H;
+//   if (tileW == 0) tileW = W;
 
-  const std::size_t th = (H + tileH - 1) / tileH;
-  const std::size_t tw = (W + tileW - 1) / tileW;
-  const std::size_t total = th * tw;
+//   const std::size_t th = (H + tileH - 1) / tileH;
+//   const std::size_t tw = (W + tileW - 1) / tileW;
+//   const std::size_t total = th * tw;
 
-  parallel_for(total, /*grain=*/0, [&](std::size_t t0, std::size_t t1){
-    for (std::size_t t = t0; t < t1; ++t) {
-      const std::size_t ih = t / tw;
-      const std::size_t iw = t % tw;
-      const std::size_t h0 = ih * tileH;
-      const std::size_t h1 = std::min(h0 + tileH, H);
-      const std::size_t w0 = iw * tileW;
-      const std::size_t w1 = std::min(w0 + tileW, W);
-      body(h0, h1, w0, w1);
-    }
-  });
-}
+//   parallel_for(total, /*grain=*/0, [&](std::size_t t0, std::size_t t1){
+//     for (std::size_t t = t0; t < t1; ++t) {
+//       const std::size_t ih = t / tw;
+//       const std::size_t iw = t % tw;
+//       const std::size_t h0 = ih * tileH;
+//       const std::size_t h1 = std::min(h0 + tileH, H);
+//       const std::size_t w0 = iw * tileW;
+//       const std::size_t w1 = std::min(w0 + tileW, W);
+//       body(h0, h1, w0, w1);
+//     }
+//   });
+// }
 
 }} // namespace ag::parallel

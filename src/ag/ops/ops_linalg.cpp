@@ -1,129 +1,489 @@
-#include "ag/ops/linalg.hpp"
-#include "ag/ops/tensor_utils.hpp"
+// Deterministic tiled matmul wired directly to ag::Variable.
+// Public symbol: ag::matmul(const Variable&, const Variable&) as declared in linalg.hpp.
+//
+// Forward:  C = A @ B        where A:[...,M,K], B:[...,K,N] -> C:[...,M,N]
+// Backward: dA = dC @ B^T    and  dB = A^T @ dC
+//
+// Assumptions
+//  - FP32 row-major contiguous storage
+//  - Determinism enforced by ScopedDeterministicParallel and fixed tile order
+//
+// This file intentionally avoids any intermediate "TensorView" types and integrates
+// straight with ag::Variable / ag::Node (value/grad/shape/parents/backward).
+
+#include <algorithm>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <stdexcept>
+#include <vector>
+
+#include "ag/core/variables.hpp"
+#include "ag/ops/linalg.hpp"
+
+#include "ag/parallel/config.hpp"
+#include "ag/parallel/parallel_for.hpp"
+#include "ag/parallel/per_thread.hpp"
+#include "ag/parallel/pool.hpp"
+
+#include "ag/ops/gemm.hpp"   // sgemm_f32 with (alpha,beta) overload linked via shim
 
 namespace ag {
-using detail::numel;
-using detail::strides_for;
-using detail::unravel_index;
-using detail::ravel_index;
-using detail::broadcast_batch;
 
-Variable matmul(const Variable& A, const Variable& B) {
-  const auto& a_shape = A.n->shape;
-  const auto& b_shape = B.n->shape;
-  if (a_shape.size() < 2 || b_shape.size() < 2)
-    throw std::invalid_argument("matmul requires rank >= 2 tensors");
+// ---- helpers ----
+static inline std::size_t numel(const std::vector<std::size_t>& sh) {
+  std::size_t n = 1;
+  for (auto d : sh) n *= d;
+  return n;
+}
 
-  const std::size_t M  = a_shape[a_shape.size()-2];
-  const std::size_t K1 = a_shape[a_shape.size()-1];
-  const std::size_t K2 = b_shape[b_shape.size()-2];
-  const std::size_t N  = b_shape[b_shape.size()-1];
-  if (K1 != K2) throw std::invalid_argument("Inner dimensions must match for matmul");
+static inline int iceil_div(int x, int y) { return (x + y - 1) / y; }
 
-  const std::vector<std::size_t> a_batch(a_shape.begin(), a_shape.end()-2);
-  const std::vector<std::size_t> b_batch(b_shape.begin(), b_shape.end()-2);
-  const std::vector<std::size_t> batch = broadcast_batch(a_batch, b_batch);
+// Map linear tile index to (ih, iw) with row-major order over tiles
+static inline void tile_index_to_coords(std::size_t t, int th, int tw, int& ih, int& iw) {
+  ih = int(t / tw);
+  iw = int(t % tw);
+}
 
-  std::vector<std::size_t> out_shape = batch; out_shape.push_back(M); out_shape.push_back(N);
-  const auto outN = numel(out_shape);
+// Compute base pointer offsets for row-major matrices with leading dim ld.
+static inline const float* ptrA(const float* A, int lda, int i0, int k0) {
+  return A + std::size_t(i0) * lda + k0;
+}
+static inline const float* ptrB(const float* B, int ldb, int k0, int j0) {
+  return B + std::size_t(k0) * ldb + j0;
+}
+static inline float* ptrC(float* C, int ldc, int i0, int j0) {
+  return C + std::size_t(i0) * ldc + j0;
+}
 
-  auto out = std::make_shared<Node>();
-  out->value.assign(outN, 0.0); out->grad.assign(outN, 0.0);
-  out->shape = out_shape; out->parents = {A.n, B.n};
-  out->requires_grad = (A.n->requires_grad || B.n->requires_grad);
+struct TileParams {
+  int tileM = 128;
+  int tileN = 128;
+  int kc    = 256;
+  int grain_in_tiles = 1;               // tiles per task
+  std::size_t small_cutoff = 64u*64u*64u; // MNK threshold for scalar path
+};
 
-  const auto a_str = strides_for(a_shape);
-  const auto b_str = strides_for(b_shape);
-  const auto o_str = strides_for(out_shape);
+// ---- Core tiled matmul on a single (non-batched) instance ----
+// A: (M,K) lda=K;  B: (K,N) ldb=N;  C: (M,N) ldc=N
+static void matmul_tiled_core(const float* A, int lda,
+                              const float* B, int ldb,
+                              float* C, int ldc,
+                              int M, int N, int K,
+                              const TileParams& tp) {
+  if (M <= 0 || N <= 0 || K <= 0) return;
 
-  const std::size_t batch_elems = batch.empty()? 1 : numel(batch);
-  for (std::size_t blin = 0; blin < batch_elems; ++blin) {
-    const auto bidx = unravel_index(blin, batch);
-    std::vector<std::size_t> a_bidx(a_batch.size(),0), b_bidx(b_batch.size(),0);
-    for (std::size_t i=0;i<batch.size();++i) {
-      const std::size_t bi = bidx[i];
-      if (i >= batch.size()-a_batch.size()) {
-        const std::size_t ai = i-(batch.size()-a_batch.size());
-        a_bidx[ai] = (a_batch[ai]==1)? 0 : bi;
-      }
-      if (i >= batch.size()-b_batch.size()) {
-        const std::size_t bj = i-(batch.size()-b_batch.size());
-        b_bidx[bj] = (b_batch[bj]==1)? 0 : bi;
+  const std::size_t mnk = std::size_t(M) * std::size_t(N) * std::size_t(K);
+  if (mnk < tp.small_cutoff) {
+    // scalar deterministic path: C = A*B
+    for (int i = 0; i < M; ++i) {
+      float* crow = C + std::size_t(i) * ldc;
+      for (int j = 0; j < N; ++j) crow[j] = 0.0f;
+    }
+    for (int k = 0; k < K; ++k) {
+      const float* Ak = A + std::size_t(k);
+      const float* Bk = B + std::size_t(k) * ldb;
+      for (int i = 0; i < M; ++i) {
+        const float aik = Ak[std::size_t(i) * lda];
+        float* crow = C + std::size_t(i) * ldc;
+        for (int j = 0; j < N; ++j) crow[j] += aik * Bk[j];
       }
     }
-    const std::size_t a_base = a_bidx.empty()? 0 : ravel_index(a_bidx, a_str);
-    const std::size_t b_base = b_bidx.empty()? 0 : ravel_index(b_bidx, b_str);
-    const std::size_t o_base = bidx.empty()? 0 : ravel_index(bidx, o_str);
-
-    for (std::size_t i=0;i<M;++i) {
-      for (std::size_t j=0;j<N;++j) {
-        double s = 0.0;
-        for (std::size_t k=0;k<K1;++k) {
-          const auto a_off = a_base + i*a_str[a_shape.size()-2] + k*a_str[a_shape.size()-1];
-          const auto b_off = b_base + k*b_str[b_shape.size()-2] + j*b_str[b_shape.size()-1];
-          s += A.n->value[a_off] * B.n->value[b_off];
-        }
-        const auto o_off = o_base + i*o_str[out_shape.size()-2] + j*o_str[out_shape.size()-1];
-        out->value[o_off] = s;
-      }
-    }
+    return;
   }
 
-  std::weak_ptr<Node> ow = out, aw = A.n, bw = B.n;
-  out->backward = [ow, aw, bw, a_shape, b_shape, out_shape, a_str, b_str, o_str]() {
-    auto o = ow.lock(); if (!o) return; auto a = aw.lock(); auto b = bw.lock();
-    if ((!a || !a->requires_grad) && (!b || !b->requires_grad)) return;
+  const int tileM = tp.tileM;
+  const int tileN = tp.tileN;
+  const int kc    = tp.kc;
 
-    const std::vector<std::size_t> a_batch(a_shape.begin(), a_shape.end()-2);
-    const std::vector<std::size_t> b_batch(b_shape.begin(), b_shape.end()-2);
-    const std::vector<std::size_t> batch = broadcast_batch(a_batch, b_batch);
+  const int th = iceil_div(M, tileM);
+  const int tw = iceil_div(N, tileN);
+  const std::size_t T = std::size_t(th) * tw;
 
-    const std::size_t M=a_shape[a_shape.size()-2], K=a_shape[a_shape.size()-1], N=b_shape[b_shape.size()-1];
-    const std::size_t batch_elems = batch.empty()? 1 : numel(batch);
+  ag::parallel::parallel_for(T, tp.grain_in_tiles, [&](std::size_t t0, std::size_t t1) {
+    for (std::size_t t = t0; t < t1; ++t) {
+      int ih, iw; tile_index_to_coords(t, th, tw, ih, iw);
+      const int i0 = ih * tileM;
+      const int j0 = iw * tileN;
+      const int i1 = std::min(i0 + tileM, M);
+      const int j1 = std::min(j0 + tileN, N);
+      const int Mb = i1 - i0;
+      const int Nb = j1 - j0;
+      if (Mb <= 0 || Nb <= 0) continue;
 
-    for (std::size_t blin = 0; blin < batch_elems; ++blin) {
-      const auto bidx = detail::unravel_index(blin, batch);
-      std::vector<std::size_t> a_bidx(a_batch.size(),0), b_bidx(b_batch.size(),0);
-      for (std::size_t i=0;i<batch.size();++i) {
-        const std::size_t bi = bidx[i];
-        if (i >= batch.size()-a_batch.size()) {
-          const std::size_t ai = i-(batch.size()-a_batch.size());
-          a_bidx[ai] = (a_batch[ai]==1)? 0 : bi;
-        }
-        if (i >= batch.size()-b_batch.size()) {
-          const std::size_t bj = i-(batch.size()-b_batch.size());
-          b_bidx[bj] = (b_batch[bj]==1)? 0 : bi;
-        }
-      }
-      const std::size_t a_base = a_bidx.empty()? 0 : ravel_index(a_bidx, a_str);
-      const std::size_t b_base = b_bidx.empty()? 0 : ravel_index(b_bidx, b_str);
-      const std::size_t o_base = bidx.empty()? 0 : ravel_index(bidx, o_str);
+      bool first_panel = true;
+      for (int k0 = 0; k0 < K; k0 += kc) {
+        const int k1 = std::min(k0 + kc, K);
+        const int Kb = k1 - k0;
 
-      for (std::size_t i=0;i<M;++i) {
-        for (std::size_t j=0;j<N;++j) {
-          const std::size_t o_off = o_base + i*o_str[out_shape.size()-2] + j*o_str[out_shape.size()-1];
-          const double go = o->grad[o_off];
-          if (a && a->requires_grad) {
-            for (std::size_t k=0;k<K;++k) {
-              const auto a_off = a_base + i*a_str[a_shape.size()-2] + k*a_str[a_shape.size()-1];
-              const auto b_off = b_base + k*b_str[b_shape.size()-2] + j*b_str[b_shape.size()-1];
-              a->grad[a_off] += go * (b ? b->value[b_off] : 0.0); // dA += dC * B^T
-            }
-          }
-          if (b && b->requires_grad) {
-            for (std::size_t k=0;k<K;++k) {
-              const auto a_off = a_base + i*a_str[a_shape.size()-2] + k*a_str[a_shape.size()-1];
-              const auto b_off = b_base + k*b_str[b_shape.size()-2] + j*b_str[b_shape.size()-1];
-              b->grad[b_off] += go * (a ? a->value[a_off] : 0.0); // dB += A^T * dC
-            }
-          }
-        }
+        const float* Ablk = ptrA(A, lda, i0, k0);
+        const float* Bblk = ptrB(B, ldb, k0, j0);
+        float*       Cblk = ptrC(C, ldc, i0, j0);
+
+        const float alpha = 1.0f;
+        const float beta  = first_panel ? 0.0f : 1.0f;
+        ag::ops::sgemm_f32(Mb, Nb, Kb, Ablk, lda, Bblk, ldb, Cblk, ldc, alpha, beta);
+        first_panel = false;
       }
     }
-  };
+  });
+}
 
-  return make_from_node(out);
+// ---- Batched matmul with broadcasting over leading dims ----
+static void matmul_batched_core(const float* A, const std::vector<std::size_t>& Ashape,
+                                const float* B, const std::vector<std::size_t>& Bshape,
+                                float* C, const std::vector<std::size_t>& Cshape,
+                                const TileParams& tp) {
+  assert(Ashape.size() >= 2 && Bshape.size() >= 2 && Cshape.size() >= 2);
+  const int M = int(Cshape[Cshape.size()-2]);
+  const int N = int(Cshape[Cshape.size()-1]);
+  const int K = int(Ashape[Ashape.size()-1]);
+  assert(int(Bshape[Bshape.size()-2]) == K);
+
+  const size_t Ar = Ashape.size();
+  const size_t Br = Bshape.size();
+  const size_t Cr = Cshape.size();
+  const size_t maxr = std::max(Ar, Br);
+
+  std::vector<std::size_t> Ab(maxr, 1), Bb(maxr, 1), Cb(maxr, 1);
+  for (size_t i = 0; i < maxr; ++i) {
+    if (i < Ar) Ab[i] = Ashape[Ar - maxr + i];
+    if (i < Br) Bb[i] = Bshape[Br - maxr + i];
+    if (i < Cr) Cb[i] = Cshape[Cr - maxr + i];
+  }
+
+  const size_t batch_dims = maxr - 2;
+  size_t Bcount = 1;
+  for (size_t i = 0; i < batch_dims; ++i) {
+    const size_t ad = Ab[i], bd = Bb[i], cd = Cb[i];
+    if (!((ad == cd || ad == 1) && (bd == cd || bd == 1)))
+      throw std::invalid_argument("matmul: incompatible broadcast batch dims");
+    Bcount *= Cb[i];
+  }
+
+  const int lda = K;
+  const int ldb = N;
+  const int ldc = N;
+
+  auto strides_for = [](const std::vector<std::size_t>& dims) {
+    std::vector<std::size_t> st(dims.size(), 0);
+    if (dims.empty()) return st;
+    st.back() = 1;
+    for (int i = int(dims.size()) - 2; i >= 0; --i) st[i] = st[i+1] * dims[i+1];
+    return st;
+  };
+  std::vector<std::size_t> Abatch = Ab, Bbatch = Bb, Cbatch = Cb;
+  Abatch.resize(batch_dims);
+  Bbatch.resize(batch_dims);
+  Cbatch.resize(batch_dims);
+  auto Astr = strides_for(Abatch);
+  auto Bstr = strides_for(Bbatch);
+  auto Cstr = strides_for(Cbatch);
+
+  auto base_incr = [](const std::vector<std::size_t>& dims, const std::vector<std::size_t>& strides) {
+    std::vector<std::size_t> inc(strides.size(), 0);
+    for (size_t i = 0; i < strides.size(); ++i) inc[i] = (dims[i] == 1) ? 0 : strides[i];
+    return inc;
+  };
+  auto Aincr = base_incr(Abatch, Astr);
+  auto Bincr = base_incr(Bbatch, Bstr);
+  auto Cincr = base_incr(Cbatch, Cstr);
+
+  for (size_t b = 0; b < Bcount; ++b) {
+    size_t rem = b;
+    std::size_t Abase = 0, Bbase = 0, Cbase = 0;
+    for (size_t i = 0; i < batch_dims; ++i) {
+      const size_t idx = rem / Cstr[i];
+      rem = rem % Cstr[i];
+      Abase += Aincr[i] * idx;
+      Bbase += Bincr[i] * idx;
+      Cbase += Cincr[i] * idx;
+    }
+
+    const float* Abptr = A + Abase * (std::size_t)M * (std::size_t)K;
+    const float* Bbptr = B + Bbase * (std::size_t)K * (std::size_t)N;
+    float*       Cbptr = C + Cbase * (std::size_t)M * (std::size_t)N;
+
+    ag::parallel::ScopedDeterministicParallel scope_guard;
+    matmul_tiled_core(Abptr, lda, Bbptr, ldb, Cbptr, ldc, M, N, K, tp);
+  }
+}
+
+// ---- Public API: matmul on Variables (forward + autograd wiring) ----
+Variable matmul(const Variable& A, const Variable& B) {
+  if (A.shape().size() < 2 || B.shape().size() < 2)
+    throw std::invalid_argument("matmul: rank < 2");
+
+  const auto& Ash = A.shape();
+  const auto& Bsh = B.shape();
+  const std::size_t M = Ash[Ash.size()-2];
+  const std::size_t K = Ash[Ash.size()-1];
+  const std::size_t Kb = Bsh[Bsh.size()-2];
+  const std::size_t N = Bsh[Bsh.size()-1];
+  if (K != Kb) throw std::invalid_argument("matmul: inner dims mismatch");
+
+  // Broadcast batch dims
+  auto broadcast_shape = [](std::vector<std::size_t> A, std::vector<std::size_t> B) {
+    const std::size_t r = std::max(A.size(), B.size());
+    A.insert(A.begin(), r - A.size(), 1);
+    B.insert(B.begin(), r - B.size(), 1);
+    std::vector<std::size_t> out(r, 1);
+    for (std::size_t i = 0; i < r; ++i) {
+      if (A[i] == B[i] || A[i] == 1) out[i] = B[i];
+      else if (B[i] == 1) out[i] = A[i];
+      else throw std::invalid_argument("matmul: incompatible broadcast dims");
+    }
+    return out;
+  };
+  std::vector<std::size_t> Ab(Ash.begin(), Ash.end()-2);
+  std::vector<std::size_t> Bb(Bsh.begin(), Bsh.end()-2);
+  auto Cshape = broadcast_shape(Ab, Bb);
+  Cshape.push_back(M);
+  Cshape.push_back(N);
+
+  // Allocate output
+  std::vector<float> out(numel(Cshape), 0.0f);
+
+  // Run deterministic forward
+  TileParams tp{};
+  {
+    ag::parallel::ScopedDeterministicParallel scope_guard;
+    matmul_batched_core(A.value().data(), Ash, B.value().data(), Bsh, out.data(), Cshape, tp);
+  }
+
+  const bool req = (A.requires_grad() || B.requires_grad()) && ag::is_grad_enabled();
+  Variable C(out, Cshape, req);
+
+  if (req) {
+    C.n->parents = { A.n, B.n };
+    C.n->backward = [An=A.n, Bn=B.n, Cn=C.n, Ash, Bsh, Cshape, tp]() {
+      // Ensure grads allocated
+      if (An->grad.size() != An->value.size()) An->grad.assign(An->value.size(), 0.0f);
+      if (Bn->grad.size() != Bn->value.size()) Bn->grad.assign(Bn->value.size(), 0.0f);
+      std::fill(An->grad.begin(), An->grad.end(), 0.0f);  // dA buffer (x.grad)
+      std::fill(Bn->grad.begin(), Bn->grad.end(), 0.0f);  // dB buffer (W.grad)
+
+      // dC view
+      const float* dC = Cn->grad.data();
+
+      // ---- dA = dC @ B^T ----
+      {
+        // Shapes: A(...,M,K), B(...,K,N), dC(...,M,N) -> dA(...,M,K)
+        const int M = int(Ash[Ash.size()-2]);
+        const int K = int(Ash[Ash.size()-1]);
+        const int N = int(Bsh[Bsh.size()-1]);
+
+        // Broadcast batch dims as in forward
+        auto strides_for = [](const std::vector<std::size_t>& dims) {
+          std::vector<std::size_t> st(dims.size(), 0);
+          if (dims.empty()) return st;
+          st.back() = 1;
+          for (int i = int(dims.size()) - 2; i >= 0; --i) st[i] = st[i+1] * dims[i+1];
+          return st;
+        };
+        auto broadcast_shape = [](std::vector<std::size_t> A, std::vector<std::size_t> B) {
+          const std::size_t r = std::max(A.size(), B.size());
+          A.insert(A.begin(), r - A.size(), 1);
+          B.insert(B.begin(), r - B.size(), 1);
+          std::vector<std::size_t> out(r, 1);
+          for (std::size_t i = 0; i < r; ++i) {
+            if (A[i] == B[i] || A[i] == 1) out[i] = B[i];
+            else if (B[i] == 1) out[i] = A[i];
+            else throw std::invalid_argument("matmul: incompatible broadcast dims");
+          }
+          return out;
+        };
+
+        std::vector<std::size_t> Ab(Ash.begin(), Ash.end()-2);
+        std::vector<std::size_t> Bb(Bsh.begin(), Bsh.end()-2);
+        auto Batch = broadcast_shape(Ab, Bb);
+        const size_t batch_dims = Batch.size();
+        size_t Bcount = 1; for (auto d: Batch) Bcount *= d;
+
+        // Batch strides over (...)
+        auto Bstr = strides_for(Batch);
+
+        // Leading dims
+        const int lda_dC = N;     // dC (M,N)
+        const int ldb_B = N;      // B (K,N)
+        const int ldc_dA = K;     // dA (M,K)
+
+        // Iterate batches lexicographically
+        for (size_t b = 0; b < Bcount; ++b) {
+          // decode b into multi-index; compute per-input base offsets honoring broadcast
+          size_t rem = b;
+          std::vector<std::size_t> idx(batch_dims, 0);
+          for (size_t i = 0; i < batch_dims; ++i) { idx[i] = rem / Bstr[i]; rem %= Bstr[i]; }
+
+          auto offset_of = [&](const std::vector<std::size_t>& full, const std::vector<std::size_t>& batch) {
+            // Map idx into the input's leading dims (with broadcasting dims==1 collapsing offset to 0)
+            const size_t in_r = full.size() - 2; // number of batch dims in this tensor
+            std::size_t off = 0, mul = 1;
+            for (int i = int(batch_dims)-1; i >= 0; --i) {
+              const size_t dim = (i < (int)in_r) ? full[i] : 1;
+              const size_t id = (dim == 1) ? 0 : idx[i];
+              off += id * mul;
+              mul *= dim;
+            }
+            return off;
+          };
+
+          const std::size_t Aoff = offset_of(Ash, Batch) * (std::size_t)M * (std::size_t)K;
+          const std::size_t Boff = offset_of(Bsh, Batch) * (std::size_t)K * (std::size_t)N;
+          const std::size_t Coff = b * (std::size_t)M * (std::size_t)N;
+
+          const float* dCptr = dC + Coff;
+          const float* Bptr  = Bn->value.data() + Boff;
+          float*       dAptr = An->grad.data() + Aoff;
+
+          TileParams tp{};
+          ag::parallel::ScopedDeterministicParallel scope_guard;
+
+          // Tile over (M,K), reduce over N in kc panels
+          const int tileM = tp.tileM, tileK = tp.tileN, kc = tp.kc;
+          const int th = iceil_div(M, tileM);
+          const int tw = iceil_div(K, tileK);
+          const std::size_t T = std::size_t(th) * tw;
+
+          ag::parallel::parallel_for(T, tp.grain_in_tiles, [&](std::size_t t0, std::size_t t1) {
+            for (std::size_t t = t0; t < t1; ++t) {
+              int ih, iw; tile_index_to_coords(t, th, tw, ih, iw);
+              const int i0 = ih * tileM;
+              const int k0 = iw * tileK;
+              const int i1 = std::min(i0 + tileM, M);
+              const int k1 = std::min(k0 + tileK, K);
+              const int Mb = i1 - i0;
+              const int Kb = k1 - k0;
+              if (Mb <= 0 || Kb <= 0) continue;
+
+              bool first_panel = true;
+              for (int j0 = 0; j0 < N; j0 += kc) {
+                const int j1 = std::min(j0 + kc, N);
+                const int Nb = j1 - j0;
+
+                const float* Ablk = dCptr + std::size_t(i0) * lda_dC + j0; // (Mb x Nb)
+                const float* Bblk = Bptr  + std::size_t(k0) * ldb_B + j0;  // (Kb x Nb)
+                float*       Cblk = dAptr + std::size_t(i0) * ldc_dA + k0; // (Mb x Kb)
+
+                const float alpha = 1.0f;
+                const float beta  = first_panel ? 0.0f : 1.0f;
+                // Use GEMM with (TransA=N, TransB=T)
+                ag::ops::sgemm_f32(Mb, Kb, Nb, ag::ops::Trans::N, ag::ops::Trans::T,
+                                   Ablk, lda_dC, Bblk, ldb_B, Cblk, ldc_dA, alpha, beta);
+                first_panel = false;
+              }
+            }
+          });
+        }
+      }
+
+      // ---- dB = A^T @ dC ----
+      {
+        const int M = int(Ash[Ash.size()-2]);
+        const int K = int(Ash[Ash.size()-1]);
+        const int N = int(Bsh[Bsh.size()-1]);
+
+        // Recompute batch broadcast as above
+        auto strides_for = [](const std::vector<std::size_t>& dims) {
+          std::vector<std::size_t> st(dims.size(), 0);
+          if (dims.empty()) return st;
+          st.back() = 1;
+          for (int i = int(dims.size()) - 2; i >= 0; --i) st[i] = st[i+1] * dims[i+1];
+          return st;
+        };
+        auto broadcast_shape = [](std::vector<std::size_t> A, std::vector<std::size_t> B) {
+          const std::size_t r = std::max(A.size(), B.size());
+          A.insert(A.begin(), r - A.size(), 1);
+          B.insert(B.begin(), r - B.size(), 1);
+          std::vector<std::size_t> out(r, 1);
+          for (std::size_t i = 0; i < r; ++i) {
+            if (A[i] == B[i] || A[i] == 1) out[i] = B[i];
+            else if (B[i] == 1) out[i] = A[i];
+            else throw std::invalid_argument("matmul: incompatible broadcast dims");
+          }
+          return out;
+        };
+
+        std::vector<std::size_t> Ab(Ash.begin(), Ash.end()-2);
+        std::vector<std::size_t> Bb(Bsh.begin(), Bsh.end()-2);
+        auto Batch = broadcast_shape(Ab, Bb);
+        const size_t batch_dims = Batch.size();
+        size_t Bcount = 1; for (auto d: Batch) Bcount *= d;
+        auto Bstr = strides_for(Batch);
+
+        const int lda_A = K;    // A (M,K)
+        const int ldb_dC = N;   // dC  (M,N)
+        const int ldc_dB = N;   // dB  (K,N)
+
+        for (size_t b = 0; b < Bcount; ++b) {
+          size_t rem = b;
+          std::vector<std::size_t> idx(batch_dims, 0);
+          for (size_t i = 0; i < batch_dims; ++i) { idx[i] = rem / Bstr[i]; rem %= Bstr[i]; }
+
+          auto offset_of = [&](const std::vector<std::size_t>& full, const std::vector<std::size_t>& batch) {
+            const size_t in_r = full.size() - 2;
+            std::size_t off = 0, mul = 1;
+            for (int i = int(batch_dims)-1; i >= 0; --i) {
+              const size_t dim = (i < (int)in_r) ? full[i] : 1;
+              const size_t id = (dim == 1) ? 0 : idx[i];
+              off += id * mul;
+              mul *= dim;
+            }
+            return off;
+          };
+
+          const std::size_t Aoff = offset_of(Ash, Batch) * (std::size_t)M * (std::size_t)K;
+          const std::size_t Boff = offset_of(Bsh, Batch) * (std::size_t)K * (std::size_t)N;
+          const std::size_t Coff = b * (std::size_t)M * (std::size_t)N;
+
+          const float* Aptr  = An->value.data() + Aoff; // (M,K) original A
+          const float* dCptr = dC + Coff;
+          float*       dBptr = Bn->grad.data() + Boff;
+
+          TileParams tp{};
+          ag::parallel::ScopedDeterministicParallel scope_guard;
+
+          // Tile over (K,N), reduce over M in kc panels
+          const int tileK = tp.tileM, tileN = tp.tileN, kc = tp.kc;
+          const int th = iceil_div(K, tileK);
+          const int tw = iceil_div(N, tileN);
+          const std::size_t T = std::size_t(th) * tw;
+
+          ag::parallel::parallel_for(T, tp.grain_in_tiles, [&](std::size_t t0, std::size_t t1) {
+            for (std::size_t t = t0; t < t1; ++t) {
+              int kh, jw; tile_index_to_coords(t, th, tw, kh, jw);
+              const int k0 = kh * tileK;
+              const int j0 = jw * tileN;
+              const int k1 = std::min(k0 + tileK, K);
+              const int j1 = std::min(j0 + tileN, N);
+              const int Kb = k1 - k0;
+              const int Nb = j1 - j0;
+              if (Kb <= 0 || Nb <= 0) continue;
+
+              bool first_panel = true;
+              for (int i0 = 0; i0 < M; i0 += kc) {
+                const int i1 = std::min(i0 + kc, M);
+                const int Mb = i1 - i0;
+
+                const float* Ablk = Aptr  + std::size_t(i0) * lda_A + k0;     // (Mb x Kb) row-major for A
+                const float* Bblk = dCptr + std::size_t(i0) * ldb_dC + j0;   // (Mb x Nb) row-major
+                float*       Cblk = dBptr + std::size_t(k0) * ldc_dB + j0;   // (Kb x Nb) row-major
+
+                const float alpha = 1.0f;
+                const float beta  = first_panel ? 0.0f : 1.0f;
+                // Use GEMM with (TransA=T, TransB=N)
+                ag::ops::sgemm_f32(Kb, Nb, Mb, ag::ops::Trans::T, ag::ops::Trans::N,
+                                   Ablk, lda_A, Bblk, ldb_dC, Cblk, ldc_dB, alpha, beta);
+                first_panel = false;
+              }
+            }
+          });
+        }
+      }
+    };
+  }
+
+  return C;
 }
 
 } // namespace ag

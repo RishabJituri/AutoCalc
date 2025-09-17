@@ -17,7 +17,7 @@ Variable cross_entropy(const Variable& logits, const std::vector<std::size_t>& t
   auto LSE = logsumexp(logits, {1}, /*keepdims=*/false);  // [B]
 
   // gather gold logits
-  std::vector<double> gold(B, 0.0);
+  std::vector<float> gold(B, 0.0);
   for (std::size_t b = 0; b < B; ++b) {
     auto t = targets[b];
     if (t >= C) throw std::invalid_argument("cross_entropy: target out of range");
@@ -33,9 +33,9 @@ Variable cross_entropy(const Variable& logits, const std::vector<std::size_t>& t
   loss->parents = {logits.n};
 
   // compute mean loss value
-  double acc = 0.0;
+  float acc = 0.0;
   for (std::size_t b = 0; b < B; ++b) acc += (LSE.n->value[b] - gold[b]);
-  loss->value[0] = acc / double(B);
+  loss->value[0] = acc / float(B);
 
   // backward: dL/dlogits = (softmax - one_hot) / B
   std::weak_ptr<Node> oweak = loss;
@@ -43,19 +43,19 @@ Variable cross_entropy(const Variable& logits, const std::vector<std::size_t>& t
     if (!Xn || !Xn->requires_grad) return;
     auto op = oweak.lock(); if (!op) return;
     Node* o = op.get();
-    const double seed = o->grad[0];  // scalar upstream grad
+    const float seed = o->grad[0];  // scalar upstream grad
 
     for (std::size_t b = 0; b < B; ++b) {
       // stable softmax
-      double m = -1e300;
+      float m = -1e300;
       for (std::size_t c = 0; c < C; ++c) m = std::max(m, Xn->value[b*C + c]);
-      double Z = 0.0;
+      float Z = 0.0;
       for (std::size_t c = 0; c < C; ++c) Z += std::exp(Xn->value[b*C + c] - m);
 
       for (std::size_t c = 0; c < C; ++c) {
-        double p = std::exp(Xn->value[b*C + c] - m) / Z;
-        double g = p - (c == targets[b] ? 1.0 : 0.0);
-        Xn->grad[b*C + c] += (g / double(B)) * seed;
+        float p = std::exp(Xn->value[b*C + c] - m) / Z;
+        float g = p - (c == targets[b] ? 1.0 : 0.0);
+        Xn->grad[b*C + c] += (g / float(B)) * seed;
       }
     }
   };

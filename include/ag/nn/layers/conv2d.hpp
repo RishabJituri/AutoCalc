@@ -27,7 +27,7 @@ struct Conv2d : public Module {
          std::pair<std::size_t,std::size_t> padding   = {0,0},
          std::pair<std::size_t,std::size_t> dilation  = {1,1},
          bool bias = true,
-         double init_scale = 0.02,
+         float init_scale = 0.02,
          unsigned long long seed = 0xC0FFEEULL)
   : in_channels_(in_channels), out_channels_(out_channels),
     kernel_(kernel_size), stride_(stride), padding_(padding), dilation_(dilation),
@@ -53,19 +53,19 @@ protected:
   void on_mode_change() override {}
 
 private:
-  static Variable make_param_(const std::vector<double>& data,
+  static Variable make_param_(const std::vector<float>& data,
                               const std::vector<std::size_t>& shape) {
     return Variable(data, shape, /*requires_grad=*/true);
   }
-  static std::vector<double> randu_(std::size_t n, double scale, unsigned long long seed) {
+  static std::vector<float> randu_(std::size_t n, float scale, unsigned long long seed) {
     std::mt19937_64 rng(seed);
-    std::uniform_real_distribution<double> dist(-scale, scale);
-    std::vector<double> v(n);
+    std::uniform_real_distribution<float> dist(-scale, scale);
+    std::vector<float> v(n);
     for (auto& t : v) t = dist(rng);
     return v;
   }
 
-  void init_params_(double scale, unsigned long long seed);
+  void init_params_(float scale, unsigned long long seed);
 
   std::size_t in_channels_  = 0;
   std::size_t out_channels_ = 0;

@@ -28,7 +28,7 @@
 #include "ag/nn/module.hpp"
 #include "ag/nn/layers/lstm.hpp"
 #include "ag/nn/layers/linear.hpp"
-#include "ag/nn/dropout.hpp"
+#include "ag/nn/layers/dropout.hpp"
 #include "ag/nn/loss.hpp"
 #include "ag/nn/optim/sgd.hpp"
 #include "ag/ops/reshape.hpp"
@@ -72,9 +72,9 @@ struct ScopedTimer {
 
 // ---------- dataset: char-level fixed windows ----------
 struct TinyShakespeareDataset : ag::data::Dataset {
-    // Each sample: x_onehot [T,V] (double), y_ids [T] (double IDs for batching)
-    std::vector<std::vector<double>> xs;   // flattened T*V one-hot
-    std::vector<std::vector<double>> ys;   // length T (double IDs)
+    // Each sample: x_onehot [T,V] (float), y_ids [T] (float IDs for batching)
+    std::vector<std::vector<float>> xs;   // flattened T*V one-hot
+    std::vector<std::vector<float>> ys;   // length T (float IDs)
     std::size_t T;
     std::size_t V;
 

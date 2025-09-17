@@ -8,7 +8,7 @@
 //   Variable add(const Variable&, const Variable&);  // with row-wise broadcast for bias
 namespace ag::nn {
 
-void Linear::init_params_(double scale, unsigned long long seed) {
+void Linear::init_params_(float scale, unsigned long long seed) {
   const std::size_t in  = in_features_;
   const std::size_t out = out_features_;
 

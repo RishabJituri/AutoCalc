@@ -80,13 +80,48 @@ inline bool deterministic_enabled() {
   return env_now;
 }
 
+// ---------- Deterministic *parallel* permission (env + scoped) ----------
+// Global permission (default: off, preserves legacy behavior)
+//   Env: AG_DETERMINISTIC_PARALLEL=0|1
+inline std::atomic<bool>& deterministic_parallel_flag() {
+  static std::atomic<bool> v{ _env_bool("AG_DETERMINISTIC_PARALLEL", false) };
+  return v;
+}
+inline void set_deterministic_parallel_global(bool on) {
+  deterministic_parallel_flag().store(on, std::memory_order_relaxed);
+}
+inline bool deterministic_parallel_global() {
+  const bool env_now = _env_bool("AG_DETERMINISTIC_PARALLEL",
+                                 deterministic_parallel_flag().load(std::memory_order_relaxed));
+  if (env_now != deterministic_parallel_flag().load(std::memory_order_relaxed)) {
+    deterministic_parallel_flag().store(env_now, std::memory_order_relaxed);
+  }
+  return env_now;
+}
+
+// Scoped permission (thread-local depth counter). Use this around ops that are
+// deterministic-by-construction (e.g., tiled GEMM with disjoint-output tiles).
+inline int& _detpar_scope_depth() { static thread_local int d = 0; return d; }
+
+struct ScopedDeterministicParallel {
+  ScopedDeterministicParallel() { ++_detpar_scope_depth(); }
+  ~ScopedDeterministicParallel() { --_detpar_scope_depth(); }
+  ScopedDeterministicParallel(const ScopedDeterministicParallel&) = delete;
+  ScopedDeterministicParallel& operator=(const ScopedDeterministicParallel&) = delete;
+  static int depth() { return _detpar_scope_depth(); }
+};
+
+inline bool deterministic_parallel_active() {
+  return deterministic_parallel_global() || (_detpar_scope_depth() > 0);
+}
+
 // ---------- Unified serial gate ----------
 inline bool serial_override() {
   // Treat max_threads==1 as serial; parallel_for also checks T==1.
   const bool max1 = get_max_threads() <= 1;
   return ScopedSerial::depth() > 0
       || nesting_flag()
-      || deterministic_enabled()
+      || (deterministic_enabled() && !deterministic_parallel_active())
       || max1;
 }
 

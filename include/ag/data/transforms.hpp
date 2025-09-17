@@ -15,7 +15,7 @@ struct Compose {
   }
 };
 
-inline Transform ToFloatScale(double scale) {
+inline Transform ToFloatScale(float scale) {
   return [scale](const Example& e){
     Example o = e;
     for (auto& v : o.x.n->value) v = v * scale;
@@ -23,7 +23,7 @@ inline Transform ToFloatScale(double scale) {
   };
 }
 
-inline Transform Normalize(double mean, double std) {
+inline Transform Normalize(float mean, float std) {
   return [mean,std](const Example& e){
     Example o = e;
     for (auto& v : o.x.n->value) v = (v - mean) / std;

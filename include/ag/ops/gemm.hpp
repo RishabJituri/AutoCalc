@@ -1,4 +1,6 @@
 #pragma once
+#include <cstring>
+#include <stdexcept>
 #include <cstddef>
 #include <algorithm>
 #include <vector>
@@ -6,6 +8,7 @@
 #include "ag/parallel/config.hpp"
 #include "ag/parallel/pool.hpp"
 #include "ag/parallel/parallel_for.hpp"
+#include "ag/sys/hw.hpp" // <-- added for cache_info()
 
 // Simple blocked SGEMM using parallel_for.
 // Layout: row-major A (M x K), row-major B (K x N), row-major C (M x N).
@@ -28,6 +31,38 @@
 
 namespace ag { namespace ops {
 
+enum class Trans { N, T };
+// ---- Minimal runtime tile picker (kept in this header to avoid extra files) ----
+struct GemmTiles {
+  int MR, NR;
+  int KC, MC, NC;
+};
+inline GemmTiles pick_tiles_runtime(std::size_t sizeofT) {
+  const auto ci   = ag::sys::cache_info();           // expects fields l1d and l2 in BYTES
+  const auto L1   = std::max<std::size_t>(ci.l1d, 16*1024ul);   // fallbacks for older boxes
+  const auto L2   = std::max<std::size_t>(ci.l2,  128*1024ul);
+  const int  Tthr = (int)ag::parallel::get_max_threads();
+
+  // Keep micro-kernel shape at 8x8 to match microkernel_8x8_f32
+  int MR = 8, NR = 8;
+
+  // Choose Kc so a Kc×NR slice of packed B sits ~half of L1 (leave room for A/C)
+  int KC = (int)std::clamp<std::size_t>( L1 / (2 * (std::size_t)NR * sizeofT),
+                                         64ul, 512ul );
+
+  // Choose Nc so a packed B panel (Kc×Nc) fits ~60% of L2
+  int NC = (int)std::max<std::size_t>( (std::size_t)NR,
+                (std::size_t)((0.6 * (float)L2) / (KC * sizeofT)) );
+  NC = (NC / NR) * NR; if (NC < NR) NC = NR; if (NC > 2048) NC = 2048;
+
+  // Choose Mc so per-thread A stripe ≈ L2/(2*T). Round to MR.
+  int MC = (int)std::max<std::size_t>( (std::size_t)MR,
+                (std::size_t)((0.5 * (float)L2) / (std::max(1,Tthr) * KC * sizeofT)) );
+  MC = (MC / MR) * MR; if (MC < MR) MC = MR; if (MC > 1024) MC = 1024;
+
+  return {MR, NR, KC, MC, NC};
+}
+
 namespace detail {
 
 // Pack A panel: (mc x kc) into (ceil(mc/MR)*MR x kc), padded with zeros.
@@ -39,15 +74,14 @@ inline void packA_f32(const float* A, int lda,
     const int ib = std::min(mr, mc - i0);
     for (int p = 0; p < kc; ++p) {
       const float* a_col = A + (i0 * lda + p);
-      for (int ii = 0; ii < ib; ++ii) Ap[ii] = a_col[ii * lda];
-      for (int ii = ib; ii < mr; ++ii) Ap[ii] = 0.0f;
+      for (int ii = 0; ii < ib; ii++) Ap[ii] = a_col[ii * lda];
+      for (int ii = ib; ii < mr; ii++) Ap[ii] = 0.0f;
       Ap += mr;
     }
   }
 }
 
 // Safe Pack B panel: (kc x nc) into (kc x ceil(nc/NR)*NR), padded with zeros.
-// Reads are guarded so we never step past the row end on the last tile.
 inline void packB_f32(const float* B, int ldb,
                       float* Bp, int kc, int nc, int nr=AG_GEMM_NR) {
   const int nb = (nc + nr - 1) / nr;   // number of NR-wide column tiles
@@ -99,8 +133,10 @@ inline void sgemm_f32(int M,int N,int K,
                       float* C,int ldc) {
   if (M<=0 || N<=0 || K<=0) return;
 
-  const int MR = AG_GEMM_MR, NR = AG_GEMM_NR;
-  const int KC = AG_GEMM_KC, MC = AG_GEMM_MC, NC = AG_GEMM_NC;
+  // ---- NEW: runtime-picked tiles (keeps MR/NR at 8 to match kernel) ----
+  const auto tiles = pick_tiles_runtime(sizeof(float));
+  const int MR = tiles.MR, NR = tiles.NR;
+  const int KC = tiles.KC, MC = tiles.MC, NC = tiles.NC;
 
   for (int jc = 0; jc < N; jc += NC) {
     const int nc = std::min(NC, N - jc);
@@ -160,6 +196,93 @@ inline void sgemm_f32(int M,int N,int K,
       }
     }
   }
+}
+
+// Transpose-aware sgemm_f32 overload
+inline void sgemm_f32(int M, int N, int K,
+                      Trans transA, Trans transB,
+                      const float* A, int lda,
+                      const float* B, int ldb,
+                      float* C, int ldc,
+                      float alpha=1.0f, float beta=1.0f)
+{
+  if (M <= 0 || N <= 0 || K <= 0) return;
+
+  // Scale C by beta once up front
+  if (beta != 1.0f) {
+    for (int i = 0; i < M; ++i) {
+      float* crow = C + std::size_t(i) * ldc;
+      for (int j = 0; j < N; ++j) crow[j] *= beta;
+    }
+  }
+
+  if (alpha == 0.0f) return;
+
+  // Fast path: NN uses the tuned kernel
+  if (transA == Trans::N && transB == Trans::N) {
+    if (alpha == 1.0f) {
+      sgemm_f32(M, N, K, A, lda, B, ldb, C, ldc);
+      return;
+    } else {
+      // Compute T = A*B, then C += alpha*T
+      std::vector<float> T(std::size_t(M) * N, 0.0f);
+      sgemm_f32(M, N, K, A, lda, B, ldb, T.data(), N);
+      for (int i = 0; i < M; ++i) {
+        float* crow = C + std::size_t(i) * ldc;
+        const float* trow = T.data() + std::size_t(i) * N;
+        for (int j = 0; j < N; ++j) crow[j] += alpha * trow[j];
+      }
+      return;
+    }
+  }
+
+  // Materialize transposed operands into small temporaries (full matrices for now)
+  std::vector<float> Ause, Buse;
+  const float* A_mat = A;
+  const float* B_mat = B;
+  int lda_use = lda, ldb_use = ldb;
+
+  if (transA == Trans::T) {
+    // Ause = transpose of A (KxM)
+    Ause.resize(std::size_t(M) * K);
+    for (int i = 0; i < M; ++i)
+      for (int k = 0; k < K; ++k)
+        Ause[std::size_t(i) * K + k] = A[std::size_t(k) * lda + i];
+    A_mat = Ause.data();
+    lda_use = K;
+  }
+  if (transB == Trans::T) {
+    // Buse = transpose of B (N x K)
+    Buse.resize(std::size_t(K) * N);
+    for (int k = 0; k < K; ++k)
+      for (int j = 0; j < N; ++j)
+        Buse[std::size_t(k) * N + j] = B[std::size_t(j) * ldb + k];
+    B_mat = Buse.data();
+    ldb_use = N;
+  }
+
+  // Now call the NN kernel with possibly materialized A/B
+  if (alpha == 1.0f) {
+    sgemm_f32(M, N, K, A_mat, lda_use, B_mat, ldb_use, C, ldc);
+  } else {
+    std::vector<float> T(std::size_t(M) * N, 0.0f);
+    sgemm_f32(M, N, K, A_mat, lda_use, B_mat, ldb_use, T.data(), N);
+    for (int i = 0; i < M; ++i) {
+      float* crow = C + std::size_t(i) * ldc;
+      const float* trow = T.data() + std::size_t(i) * N;
+      for (int j = 0; j < N; ++j) crow[j] += alpha * trow[j];
+    }
+  }
+}
+
+// Only a shim that forwards to the new trans overload for NN
+inline void sgemm_f32(int M, int N, int K,
+                      const float* A, int lda,
+                      const float* B, int ldb,
+                      float* C, int ldc,
+                      float alpha, float beta)
+{
+  sgemm_f32(M, N, K, Trans::N, Trans::N, A, lda, B, ldb, C, ldc, alpha, beta);
 }
 
 }} // namespace ag::ops

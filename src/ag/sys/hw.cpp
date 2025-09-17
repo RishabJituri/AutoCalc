@@ -28,7 +28,7 @@ std::mutex g_reload_mtx;       // protects re-detect in reload()
 static std::size_t parse_bytes_env(const char* s, std::size_t def) {
   if (!s || !*s) return def;
   char* end = nullptr;
-  double v = std::strtod(s, &end);
+  float v = std::strtod(s, &end);
   if (v <= 0) return def;
   while (end && *end == ' ') ++end;
   // Accept K/M/G suffix (case-insensitive)

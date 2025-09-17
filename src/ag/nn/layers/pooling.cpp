@@ -28,8 +28,8 @@ Variable MaxPool2d::forward(const Variable& X) {
 
   auto out = std::make_shared<Node>();
   out->shape = yshape;
-  out->value.assign(numel(yshape), -std::numeric_limits<double>::infinity());
-  out->grad.assign(numel(yshape), 0.0);
+  out->value.assign(numel(yshape), -std::numeric_limits<float>::infinity());
+  out->grad.assign(numel(yshape), 0.0f);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 
@@ -41,7 +41,7 @@ Variable MaxPool2d::forward(const Variable& X) {
   for (std::size_t c=0;c<C;++c)
   for (std::size_t oh=0;oh<H_out;++oh)
   for (std::size_t ow=0;ow<W_out;++ow) {
-    double m = -std::numeric_limits<double>::infinity();
+    float m = -std::numeric_limits<float>::infinity();
     for (std::size_t kh=0;kh<kH;++kh)
     for (std::size_t kw=0;kw<kW;++kw) {
       long long ih = (long long)oh*(long long)sH + (long long)kh - (long long)pH;
@@ -68,7 +68,7 @@ out->backward = [this, Xn = X.n, xs, yshape,
   for (std::size_t c=0;c<C;++c)
   for (std::size_t oh=0;oh<H_out;++oh)
   for (std::size_t ow=0;ow<W_out;++ow) {
-    double m = o->value[b*ystr[0] + c*ystr[1] + oh*ystr[2] + ow*ystr[3]];
+    float m = o->value[b*ystr[0] + c*ystr[1] + oh*ystr[2] + ow*ystr[3]];
     std::size_t ties = 0;
     for (std::size_t kh=0; kh<this->kH; ++kh)
     for (std::size_t kw=0; kw<this->kW; ++kw) {
@@ -79,7 +79,7 @@ out->backward = [this, Xn = X.n, xs, yshape,
       if (Xn->value[xi] == m) ++ties;
     }
     if (ties == 0) continue;
-    double g = o->grad[b*ystr[0] + c*ystr[1] + oh*ystr[2] + ow*ystr[3]] / double(ties);
+    float g = o->grad[b*ystr[0] + c*ystr[1] + oh*ystr[2] + ow*ystr[3]] / float(ties);
     for (std::size_t kh=0; kh<this->kH; ++kh)
     for (std::size_t kw=0; kw<this->kW; ++kw) {
       long long ih = (long long)oh*(long long)this->sH + (long long)kh - (long long)this->pH;
@@ -106,8 +106,8 @@ Variable AvgPool2d::forward(const Variable& X) {
 
   auto out = std::make_shared<Node>();
   out->shape = yshape;
-  out->value.assign(numel(yshape), 0.0);
-  out->grad.assign(numel(yshape), 0.0);
+  out->value.assign(numel(yshape), 0.0f);
+  out->grad.assign(numel(yshape), 0.0f);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 
@@ -119,7 +119,7 @@ Variable AvgPool2d::forward(const Variable& X) {
   for (std::size_t c=0;c<C;++c)
   for (std::size_t oh=0;oh<H_out;++oh)
   for (std::size_t ow=0;ow<W_out;++ow) {
-    double acc = 0.0;
+    float acc = 0.0f;
     std::size_t count = 0;
     for (std::size_t kh=0;kh<kH;++kh)
     for (std::size_t kw=0;kw<kW;++kw) {
@@ -131,7 +131,7 @@ Variable AvgPool2d::forward(const Variable& X) {
       ++count;
     }
     std::size_t yi = b*ystr[0] + c*ystr[1] + oh*ystr[2] + ow*ystr[3];
-    out->value[yi] = (count == 0) ? 0.0 : acc / double(count);
+    out->value[yi] = (count == 0) ? 0.0f : acc / float(count);
   }
 
   out->backward = [this, Xn = X.n, xs, yshape,
@@ -158,7 +158,7 @@ Variable AvgPool2d::forward(const Variable& X) {
         ++count;
       }
       if (count==0) continue;
-      double g = o->grad[b*ystr[0] + c*ystr[1] + oh*ystr[2] + ow*ystr[3]] / double(count);
+      float g = o->grad[b*ystr[0] + c*ystr[1] + oh*ystr[2] + ow*ystr[3]] / float(count);
       for (std::size_t kh=0; kh<this->kH; ++kh)
       for (std::size_t kw=0; kw<this->kW; ++kw) {   // <-- fixed
         long long ih = (long long)oh*(long long)this->sH + (long long)kh - (long long)this->pH;

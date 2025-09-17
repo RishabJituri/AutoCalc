@@ -8,6 +8,6 @@ Variable relu(const Variable& x);
 Variable sigmoid(const Variable& x);
 Variable tanhv(const Variable& x);   // named tanhv to avoid clash with std::tanh
 Variable logv(const Variable& x);
-Variable clamp(const Variable& x, double lo, double hi);
+Variable clamp(const Variable& x, float lo, float hi);
 
 } // namespace ag

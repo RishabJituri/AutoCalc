@@ -6,10 +6,10 @@
 namespace ag::nn {
 
 struct Dropout : Module {
-  double   p{0.5};
+  float   p{0.5};
   uint64_t seed{0};
 
-  explicit Dropout(double p = 0.5, uint64_t seed = 0) : p(p), seed(seed) {}
+  explicit Dropout(float p = 0.5, uint64_t seed = 0) : p(p), seed(seed) {}
 
   ag::Variable forward(const ag::Variable& x) override;
 

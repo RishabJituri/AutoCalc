@@ -12,7 +12,7 @@ using ag::detail::ravel_index;
 
 static inline std::size_t div_floor(std::size_t a, std::size_t b) { return a / b; }
 
-void Conv2d::init_params_(double scale, unsigned long long seed) {
+void Conv2d::init_params_(float scale, unsigned long long seed) {
   const std::size_t Cin = in_channels_;
   const std::size_t Cout = out_channels_;
   const std::size_t KH = kernel_.first, KW = kernel_.second;
@@ -25,7 +25,7 @@ void Conv2d::init_params_(double scale, unsigned long long seed) {
   if (bias_) {
     b_ = make_param_(randu_(Cout, scale, seed + 1337ULL), {Cout});
   } else {
-    b_ = Variable(std::vector<double>{}, {0}, /*requires_grad=*/false);
+    b_ = Variable(std::vector<float>{}, {0}, /*requires_grad=*/false);
   }
 }
 
@@ -66,7 +66,7 @@ Variable Conv2d::forward(const Variable& x) {
     for (std::size_t oc = 0; oc < Cout; ++oc) {
       for (std::size_t oh = 0; oh < H_out; ++oh) {
         for (std::size_t ow = 0; ow < W_out; ++ow) {
-          double acc = bias_ ? b_.n->value[oc] : 0.0;
+          float acc = bias_ ? b_.n->value[oc] : 0.0;
           const int in_h0 = int(oh*SH) - int(PH);
           const int in_w0 = int(ow*SW) - int(PW);
           for (std::size_t ic = 0; ic < Cin; ++ic) {
@@ -112,7 +112,7 @@ Variable Conv2d::forward(const Variable& x) {
         for (std::size_t oh = 0; oh < H_out; ++oh) {
           for (std::size_t ow = 0; ow < W_out; ++ow) {
             const std::size_t y_off = ((b*Cout + oc)*H_out + oh)*W_out + ow;
-            const double go = o->grad[y_off];
+            const float go = o->grad[y_off];
 
             // bias grad
             if (bnode && bnode->requires_grad) {

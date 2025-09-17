@@ -1,32 +1,34 @@
-
 #include "ag/core/stochastic.hpp"
 #include "ag/ops/tensor_utils.hpp"
 #include "ag/core/rng.hpp"
 #include <cmath>
 #include <algorithm>
 #include <stdexcept>
+#include <cmath>
+#include <stdexcept>
+#include <memory>
 
 namespace ag{
 using detail::numel;
 
 // Utilities
-static void softmax_rows(const std::vector<double>& s, const std::vector<std::size_t>& shape,
-                         std::vector<double>& out_p, std::vector<double>& out_logp_row) {
+static void softmax_rows(const std::vector<float>& s, const std::vector<std::size_t>& shape,
+                         std::vector<float>& out_p, std::vector<float>& out_logp_row) {
   // shape = [K] or [B,K]; out_p same size as s. out_logp_row shape [B] or [1].
   if (shape.empty()) throw std::invalid_argument("softmax_rows: empty shape");
   if (shape.size() > 2) throw std::invalid_argument("softmax_rows: rank > 2 not supported");
   const std::size_t B = (shape.size()==2)? shape[0] : 1;
   const std::size_t K = (shape.size()==2)? shape[1] : shape[0];
   out_p.resize(s.size());
-  out_logp_row.assign(B, 0.0);
+  out_logp_row.assign(B, 0.0f);
   for (std::size_t b=0; b<B; ++b) {
     const std::size_t base = b*K;
     // log-sum-exp
-    double m = -1e300;
+    float m = -1e30f;
     for (std::size_t k=0;k<K;++k) m = std::max(m, s[base+k]);
-    double sum = 0.0;
+    float sum = 0.0f;
     for (std::size_t k=0;k<K;++k) sum += std::exp(s[base+k]-m);
-    const double lse = m + std::log(sum);
+    const float lse = m + std::log(sum);
     out_logp_row[b] = lse;
     for (std::size_t k=0;k<K;++k) out_p[base+k] = std::exp(s[base+k]-lse);
   }
@@ -43,19 +45,19 @@ static Variable LogProbFromLogitsAndOneHot(const Variable& logits, const Variabl
   const std::size_t K = (shp.size()==2)? shp[1] : shp[0];
 
   out->shape = (B==1? std::vector<std::size_t>{} : std::vector<std::size_t>{B});
-  out->value.assign(B==1? 1: B, 0.0);
-  out->grad.assign(B==1? 1: B, 0.0);
+  out->value.assign(B==1? 1: B, 0.0f);
+  out->grad.assign(B==1? 1: B, 0.0f);
   out->parents = {logits.n, onehot.n};
   out->requires_grad = logits.n->requires_grad; // onehot is constant leaf typically
 
   // forward: compute p and then log p(a) per row
-  std::vector<double> p, lse;
+  std::vector<float> p, lse;
   softmax_rows(logits.n->value, shp, p, lse);
   for (std::size_t b=0;b<B;++b) {
-    double lp = 0.0;
+    float lp = 0.0f;
     for (std::size_t k=0;k<K;++k) {
-      const double oh = onehot.n->value[b*K + k];
-      if (oh!=0.0) {
+      const float oh = onehot.n->value[b*K + k];
+      if (oh!=0.0f) {
         lp += (logits.n->value[b*K + k] - lse[b]); // log p(a)
       }
     }
@@ -70,13 +72,13 @@ static Variable LogProbFromLogitsAndOneHot(const Variable& logits, const Variabl
     const std::size_t B = (shp.size()==2)? shp[0] : 1;
     const std::size_t K = (shp.size()==2)? shp[1] : shp[0];
     // Recompute probs from saved logits (cheap)
-    std::vector<double> p, lse;
+    std::vector<float> p, lse;
     softmax_rows(l->value, shp, p, lse);
     for (std::size_t b=0;b<B;++b) {
-      const double go = o->grad[B==1?0:b]; // upstream scalar per row
+      const float go = o->grad[B==1?0:b]; // upstream scalar per row
       // grad wrt logits = (one_hot - p) * go
       for (std::size_t k=0;k<K;++k) {
-        const double oh = h? h->value[b*K + k] : 0.0;
+        const float oh = h? h->value[b*K + k] : 0.0f;
         l->grad[b*K + k] += go * (oh - p[b*K + k]);
       }
     }
@@ -92,26 +94,26 @@ SampleOut CategoricalSample(const Variable& logits, uint64_t seed) {
   const std::size_t K = (logits.n->shape.size()==2)? logits.n->shape[1] : logits.n->shape[0];
 
   // compute probs
-  std::vector<double> p, lse;
+  std::vector<float> p, lse;
   softmax_rows(logits.n->value, logits.n->shape, p, lse);
 
   // sample indices and build one-hot
   RNG rng(seed);
-  std::vector<double> onehot(B*K, 0.0);
+  std::vector<float> onehot(B*K, 0.0f);
   for (std::size_t b=0;b<B;++b) {
-    double u = rng.next_uniform01();
+    float u = rng.next_uniform01();
     // inverse cdf
-    double acc = 0.0; std::size_t a = 0;
+    float acc = 0.0f; std::size_t a = 0;
     for (; a<K; ++a) { acc += p[b*K + a]; if (u <= acc) break; }
     if (a>=K) a=K-1;
-    onehot[b*K + a] = 1.0;
+    onehot[b*K + a] = 1.0f;
   }
 
   // Build Variables
   auto onehot_node = std::make_shared<Node>();
   onehot_node->shape = logits.n->shape;
   onehot_node->value = std::move(onehot);
-  onehot_node->grad.assign(B*K, 0.0);
+  onehot_node->grad.assign(B*K, 0.0f);
   onehot_node->requires_grad = false;
   // onehot is a leaf constant in the graph (no backward)
 
@@ -120,8 +122,8 @@ SampleOut CategoricalSample(const Variable& logits, uint64_t seed) {
   return { onehot_var, logprob_var };
 }
 
-Variable GumbelSoftmax(const Variable& logits, double tau, bool hard, uint64_t seed) {
-  if (tau <= 0.0) throw std::invalid_argument("GumbelSoftmax: tau must be > 0");
+Variable GumbelSoftmax(const Variable& logits, float tau, bool hard, uint64_t seed) {
+  if (tau <= 0.0f) throw std::invalid_argument("GumbelSoftmax: tau must be > 0");
   if (logits.n->shape.empty() || logits.n->shape.size()>2)
     throw std::invalid_argument("GumbelSoftmax: logits shape must be [K] or [B,K]");
   const std::size_t B = (logits.n->shape.size()==2)? logits.n->shape[0] : 1;
@@ -130,22 +132,22 @@ Variable GumbelSoftmax(const Variable& logits, double tau, bool hard, uint64_t s
   // Build a node: forward adds Gumbel noise, divides by tau, softmax; backward is standard softmax backward (pathwise)
   auto out = std::make_shared<Node>();
   out->shape = logits.n->shape;
-  out->value.assign(B*K, 0.0);
-  out->grad.assign(B*K, 0.0);
+  out->value.assign(B*K, 0.0f);
+  out->grad.assign(B*K, 0.0f);
   out->parents = { logits.n };
   out->requires_grad = logits.n->requires_grad;
 
   // forward
   RNG rng(seed);
-  std::vector<double> s = logits.n->value;
+  std::vector<float> s = logits.n->value;
   for (std::size_t i=0;i<s.size();++i) {
     // Gumbel(0,1) = -log(-log U)
-    double u = std::max(1e-12, rng.next_uniform01());
-    double g = -std::log(-std::log(u));
+    float u = std::max(1e-12f, float(rng.next_uniform01()));
+    float g = -std::log(-std::log(u));
     s[i] = (s[i] + g) / tau;
   }
   // softmax
-  std::vector<double> p, lse;
+  std::vector<float> p, lse;
   softmax_rows(s, out->shape, p, lse);
   // possibly straight-through hardening
   if (hard) {
@@ -166,12 +168,12 @@ Variable GumbelSoftmax(const Variable& logits, double tau, bool hard, uint64_t s
     // softmax backward per row: dL/ds = J_softmax^T * dL/dp
     for (std::size_t b=0;b<B;++b) {
       // compute dot(go, p)
-      double dot = 0.0;
+      float dot = 0.0f;
       for (std::size_t k=0;k<K;++k) dot += o->grad[b*K + k] * o->value[b*K + k];
       for (std::size_t k=0;k<K;++k) {
-        const double pk = o->value[b*K + k];
-        const double go = o->grad[b*K + k];
-        const double gs = pk * (go - dot); // derivative wrt logits (since ds/dlogits = I for added noise treated constant)
+        const float pk = o->value[b*K + k];
+        const float go = o->grad[b*K + k];
+        const float gs = pk * (go - dot); // derivative wrt logits (since ds/dlogits = I for added noise treated constant)
         l->grad[b*K + k] += gs;
       }
     }

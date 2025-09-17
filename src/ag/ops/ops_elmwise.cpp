@@ -33,8 +33,8 @@ Variable add(const Variable& A, const Variable& B) {
 
   auto out = std::make_shared<Node>();
   out->shape = out_shape;
-  out->value.assign(oN, 0.0);
-  out->grad.assign(oN, 0.0);
+  out->value.assign(oN, 0.0f);
+  out->grad.assign(oN, 0.0f);
   out->requires_grad = (A.n->requires_grad || B.n->requires_grad);
   out->parents = {A.n, B.n};
 
@@ -45,7 +45,7 @@ Variable add(const Variable& A, const Variable& B) {
     auto idx = detail::unravel_index(lin, out_shape);
     const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
     const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
-    out->value[lin] = A.n->value[ai] + B.n->value[bi];
+    out->value[lin] = static_cast<float>(A.n->value[ai]) + static_cast<float>(B.n->value[bi]);
   }
 
   std::weak_ptr<Node> ow = out, aw = A.n, bw = B.n;
@@ -57,11 +57,11 @@ Variable add(const Variable& A, const Variable& B) {
       auto idx = detail::unravel_index(lin, out_shape);
       if (a && a->requires_grad) {
         const std::size_t ai = map_aligned(idx, out_shape, a->shape, As);
-        a->grad[ai] += o->grad[lin];            // dy/da = 1
+        a->grad[ai] += static_cast<float>(o->grad[lin]);            // dy/da = 1
       }
       if (b && b->requires_grad) {
         const std::size_t bi = map_aligned(idx, out_shape, b->shape, Bs);
-        b->grad[bi] += o->grad[lin];            // dy/dc = 1
+        b->grad[bi] += static_cast<float>(o->grad[lin]);            // dy/dc = 1
       }
     }
   };
@@ -74,7 +74,7 @@ Variable sub(const Variable& A, const Variable& B) {
   const std::size_t oN = numel(out_shape);
 
   auto out = std::make_shared<Node>();
-  out->shape = out_shape; out->value.assign(oN, 0.0); out->grad.assign(oN, 0.0);
+  out->shape = out_shape; out->value.assign(oN, 0.0f); out->grad.assign(oN, 0.0f);
   out->requires_grad = (A.n->requires_grad || B.n->requires_grad);
   out->parents = {A.n, B.n};
 
@@ -84,7 +84,7 @@ Variable sub(const Variable& A, const Variable& B) {
     const auto idx = detail::unravel_index(lin, out_shape);
     const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
     const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
-    out->value[lin] = A.n->value[ai] - B.n->value[bi];
+    out->value[lin] = static_cast<float>(A.n->value[ai]) - static_cast<float>(B.n->value[bi]);
   }
 
   std::weak_ptr<Node> ow = out, aw = A.n, bw = B.n;
@@ -94,11 +94,11 @@ Variable sub(const Variable& A, const Variable& B) {
       auto idx = detail::unravel_index(lin, out_shape);
       if (a && a->requires_grad) {
         const std::size_t ai = map_aligned(idx, out_shape, a->shape, As);
-        a->grad[ai] += o->grad[lin];
+        a->grad[ai] += static_cast<float>(o->grad[lin]);
       }
       if (b && b->requires_grad) {
         const std::size_t bi = map_aligned(idx, out_shape, b->shape, Bs);
-        b->grad[bi] -= o->grad[lin];            // minus sign
+        b->grad[bi] -= static_cast<float>(o->grad[lin]);            // minus sign
       }
     }
   };
@@ -111,7 +111,7 @@ Variable mul(const Variable& A, const Variable& B) {
   const std::size_t oN = numel(out_shape);
 
   auto out = std::make_shared<Node>();
-  out->shape = out_shape; out->value.assign(oN, 0.0); out->grad.assign(oN, 0.0);
+  out->shape = out_shape; out->value.assign(oN, 0.0f); out->grad.assign(oN, 0.0f);
   out->requires_grad = (A.n->requires_grad || B.n->requires_grad);
   out->parents = {A.n, B.n};
 
@@ -121,7 +121,7 @@ Variable mul(const Variable& A, const Variable& B) {
     const auto idx = detail::unravel_index(lin, out_shape);
     const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
     const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
-    out->value[lin] = A.n->value[ai] * B.n->value[bi];
+    out->value[lin] = static_cast<float>(A.n->value[ai]) * static_cast<float>(B.n->value[bi]);
   }
 
   std::weak_ptr<Node> ow = out, aw = A.n, bw = B.n;
@@ -131,8 +131,8 @@ Variable mul(const Variable& A, const Variable& B) {
       const auto idx = detail::unravel_index(lin, out_shape);
       const std::size_t ai = a ? map_aligned(idx, out_shape, a->shape, As) : 0;
       const std::size_t bi = b ? map_aligned(idx, out_shape, b->shape, Bs) : 0;
-      if (a && a->requires_grad) a->grad[ai] += o->grad[lin] * (b ? b->value[bi] : 0.0);
-      if (b && b->requires_grad) b->grad[bi] += o->grad[lin] * (a ? a->value[ai] : 0.0);
+      if (a && a->requires_grad) a->grad[ai] += static_cast<float>(o->grad[lin]) * (b ? static_cast<float>(b->value[bi]) : 0.0f);
+      if (b && b->requires_grad) b->grad[bi] += static_cast<float>(o->grad[lin]) * (a ? static_cast<float>(a->value[ai]) : 0.0f);
     }
   };
 
@@ -144,7 +144,7 @@ Variable div(const Variable& A, const Variable& B) {
   const std::size_t oN = numel(out_shape);
 
   auto out = std::make_shared<Node>();
-  out->shape = out_shape; out->value.assign(oN, 0.0); out->grad.assign(oN, 0.0);
+  out->shape = out_shape; out->value.assign(oN, 0.0f); out->grad.assign(oN, 0.0f);
   out->requires_grad = (A.n->requires_grad || B.n->requires_grad);
   out->parents = {A.n, B.n};
 
@@ -154,7 +154,7 @@ Variable div(const Variable& A, const Variable& B) {
     const auto idx = detail::unravel_index(lin, out_shape);
     const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
     const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
-    out->value[lin] = A.n->value[ai] / B.n->value[bi];
+    out->value[lin] = static_cast<float>(A.n->value[ai]) / static_cast<float>(B.n->value[bi]);
   }
 
   std::weak_ptr<Node> ow = out, aw = A.n, bw = B.n;
@@ -164,9 +164,9 @@ Variable div(const Variable& A, const Variable& B) {
       const auto idx = detail::unravel_index(lin, out_shape);
       const std::size_t ai = a ? map_aligned(idx, out_shape, a->shape, As) : 0;
       const std::size_t bi = b ? map_aligned(idx, out_shape, b->shape, Bs) : 0;
-      const double denom = (b ? b->value[bi] : 1.0);
-      if (a && a->requires_grad) a->grad[ai] += o->grad[lin] / denom;
-      if (b && b->requires_grad) b->grad[bi] += - o->grad[lin] * (a ? a->value[ai] : 0.0) / (denom*denom);
+      const float denom = (b ? static_cast<float>(b->value[bi]) : 1.0f);
+      if (a && a->requires_grad) a->grad[ai] += static_cast<float>(o->grad[lin]) / denom;
+      if (b && b->requires_grad) b->grad[bi] += - static_cast<float>(o->grad[lin]) * (a ? static_cast<float>(a->value[ai]) : 0.0f) / (denom*denom);
     }
   };
 
@@ -175,56 +175,56 @@ Variable div(const Variable& A, const Variable& B) {
 
 Variable neg(const Variable& X) {
   auto out = std::make_shared<Node>();
-  out->shape = X.n->shape; out->value = X.n->value; out->grad.assign(out->value.size(), 0.0);
-  for (double& v : out->value) v = -v;
+  out->shape = X.n->shape; out->value = X.n->value; out->grad.assign(out->value.size(), 0.0f);
+  for (float& v : out->value) v = -v;
   out->requires_grad = X.n->requires_grad; out->parents = {X.n};
 
   std::weak_ptr<Node> ow = out, xw = X.n;
   out->backward = [ow, xw]() {
     auto o = ow.lock(); auto x = xw.lock(); if (!o || !x || !x->requires_grad) return;
-    for (std::size_t i = 0; i < o->grad.size(); ++i) x->grad[i] += -o->grad[i];
+    for (std::size_t i = 0; i < o->grad.size(); ++i) x->grad[i] += -static_cast<float>(o->grad[i]);
   };
   return make_from_node(out);
 }
 
 Variable sinv(const Variable& X) {
   auto out = std::make_shared<Node>();
-  out->shape = X.n->shape; out->value.assign(X.n->value.size(), 0.0); out->grad.assign(X.n->value.size(), 0.0);
+  out->shape = X.n->shape; out->value.assign(X.n->value.size(), 0.0f); out->grad.assign(X.n->value.size(), 0.0f);
   out->requires_grad = X.n->requires_grad; out->parents = {X.n};
-  for (std::size_t i=0;i<X.n->value.size();++i) out->value[i] = std::sin(X.n->value[i]);
+  for (std::size_t i=0;i<X.n->value.size();++i) out->value[i] = std::sin(static_cast<float>(X.n->value[i]));
 
   std::weak_ptr<Node> ow = out, xw = X.n;
   out->backward = [ow, xw]() {
     auto o = ow.lock(); auto x = xw.lock(); if (!o || !x || !x->requires_grad) return;
-    for (std::size_t i=0;i<o->grad.size();++i) x->grad[i] += o->grad[i] * std::cos(x->value[i]);
+    for (std::size_t i=0;i<o->grad.size();++i) x->grad[i] += static_cast<float>(o->grad[i]) * std::cos(static_cast<float>(x->value[i]));
   };
   return make_from_node(out);
 }
 
 Variable cosv(const Variable& X) {
   auto out = std::make_shared<Node>();
-  out->shape = X.n->shape; out->value.assign(X.n->value.size(), 0.0); out->grad.assign(X.n->value.size(), 0.0);
+  out->shape = X.n->shape; out->value.assign(X.n->value.size(), 0.0f); out->grad.assign(X.n->value.size(), 0.0f);
   out->requires_grad = X.n->requires_grad; out->parents = {X.n};
-  for (std::size_t i=0;i<X.n->value.size();++i) out->value[i] = std::cos(X.n->value[i]);
+  for (std::size_t i=0;i<X.n->value.size();++i) out->value[i] = std::cos(static_cast<float>(X.n->value[i]));
 
   std::weak_ptr<Node> ow = out, xw = X.n;
   out->backward = [ow, xw]() {
     auto o = ow.lock(); auto x = xw.lock(); if (!o || !x || !x->requires_grad) return;
-    for (std::size_t i=0;i<o->grad.size();++i) x->grad[i] += -o->grad[i] * std::sin(x->value[i]);
+    for (std::size_t i=0;i<o->grad.size();++i) x->grad[i] += -static_cast<float>(o->grad[i]) * std::sin(static_cast<float>(x->value[i]));
   };
   return make_from_node(out);
 }
 
 Variable expv(const Variable& X) {
   auto out = std::make_shared<Node>();
-  out->shape = X.n->shape; out->value.assign(X.n->value.size(), 0.0); out->grad.assign(X.n->value.size(), 0.0);
+  out->shape = X.n->shape; out->value.assign(X.n->value.size(), 0.0f); out->grad.assign(X.n->value.size(), 0.0f);
   out->requires_grad = X.n->requires_grad; out->parents = {X.n};
-  for (std::size_t i=0;i<X.n->value.size();++i) out->value[i] = std::exp(X.n->value[i]);
+  for (std::size_t i=0;i<X.n->value.size();++i) out->value[i] = std::exp(static_cast<float>(X.n->value[i]));
 
   std::weak_ptr<Node> ow = out, xw = X.n;
   out->backward = [ow, xw]() {
     auto o = ow.lock(); auto x = xw.lock(); if (!o || !x || !x->requires_grad) return;
-    for (std::size_t i=0;i<o->grad.size();++i) x->grad[i] += o->grad[i] * o->value[i]; // d/dx exp(x) = exp(x)
+    for (std::size_t i=0;i<o->grad.size();++i) x->grad[i] += static_cast<float>(o->grad[i]) * static_cast<float>(o->value[i]); // d/dx exp(x) = exp(x)
   };
   return make_from_node(out);
 }
@@ -234,7 +234,7 @@ Variable pow(const Variable& A, const Variable& P) {
   const std::size_t oN = numel(out_shape);
 
   auto out = std::make_shared<Node>();
-  out->shape = out_shape; out->value.assign(oN, 0.0); out->grad.assign(oN, 0.0);
+  out->shape = out_shape; out->value.assign(oN, 0.0f); out->grad.assign(oN, 0.0f);
   out->requires_grad = (A.n->requires_grad || P.n->requires_grad);
   out->parents = {A.n, P.n};
 
@@ -244,7 +244,7 @@ Variable pow(const Variable& A, const Variable& P) {
     const auto idx = detail::unravel_index(lin, out_shape);
     const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
     const std::size_t pi = map_aligned(idx, out_shape, P.n->shape, Ps);
-    out->value[lin] = std::pow(A.n->value[ai], P.n->value[pi]);
+    out->value[lin] = std::pow(static_cast<float>(A.n->value[ai]), static_cast<float>(P.n->value[pi]));
   }
 
   std::weak_ptr<Node> ow = out, aw = A.n, pw = P.n;
@@ -256,14 +256,14 @@ Variable pow(const Variable& A, const Variable& P) {
       const std::size_t pi = p ? map_aligned(idx, out_shape, p->shape, Ps) : 0;
 
       if (a && a->requires_grad) {
-        const double y = a->value[ai];
-        const double pe = p ? p->value[pi] : 0.0;
-        if (!(y == 0.0 && pe < 1.0)) a->grad[ai] += o->grad[lin] * (pe * std::pow(y, pe - 1.0));
+        const float y = static_cast<float>(a->value[ai]);
+        const float pe = p ? static_cast<float>(p->value[pi]) : 0.0f;
+        if (!(y == 0.0f && pe < 1.0f)) a->grad[ai] += static_cast<float>(o->grad[lin]) * (pe * std::pow(y, pe - 1.0f));
       }
       if (p && p->requires_grad) {
-        const double y = a ? a->value[ai] : 1.0;
-        const double ln_y = (y > 0.0) ? std::log(y) : 0.0;
-        p->grad[pi] += o->grad[lin] * (o->value[lin] * ln_y);
+        const float y = a ? static_cast<float>(a->value[ai]) : 1.0f;
+        const float ln_y = (y > 0.0f) ? std::log(y) : 0.0f;
+        p->grad[pi] += static_cast<float>(o->grad[lin]) * (static_cast<float>(o->value[lin]) * ln_y);
       }
     }
   };

@@ -13,8 +13,8 @@ inline void set_grad_enabled(bool v) { __grad_enabled = v; }
 
 
 struct Node {
-  std::vector<double> value;                // flattened tensor
-  std::vector<double> grad;                 // same size as value
+  std::vector<float> value;                // flattened tensor
+  std::vector<float> grad;                 // same size as value
   std::vector<std::size_t> shape;           // tensor shape
   bool requires_grad = false;
 
@@ -26,18 +26,18 @@ class Variable {
 public:
   Variable();                                                   // empty node
   explicit Variable(std::shared_ptr<Node> node);                // wrap existing
-  Variable(const std::vector<double>& value,
+  Variable(const std::vector<float>& value,
            const std::vector<std::size_t>& shape,
            bool requires_grad = true);
 
-  const std::vector<double>& value() const;
-  const std::vector<double>& grad()  const;
+  const std::vector<float>& value() const;
+  const std::vector<float>& grad()  const;
   const std::vector<std::size_t>& shape() const;
   bool requires_grad() const;
 
   void zero_grad();                                // zero across reachable subgraph
   void backward();                                 // scalar output → seed 1
-  void backward(const std::vector<double>& seed);  // tensor output → explicit seed
+  void backward(const std::vector<float>& seed);  // tensor output → explicit seed
 
   // expose node handle for ops implementation
   std::shared_ptr<Node> n;

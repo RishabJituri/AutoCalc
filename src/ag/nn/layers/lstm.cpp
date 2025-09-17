@@ -9,9 +9,9 @@
 
 namespace ag {
   // Small helpers built from existing elementwise ops
-  static Variable const_scalar_like(const Variable& ref, double v) {
+  static Variable const_scalar_like(const Variable& ref, float v) {
     const auto& sh = ref.shape();
-    std::vector<double> data(ref.value().size(), v);
+    std::vector<float> data(ref.value().size(), v);
     return Variable(data, sh, /*requires_grad=*/false);
   }
   static Variable sigmoid(const Variable& x) {
@@ -35,7 +35,7 @@ using ag::detail::numel;
 using ag::sigmoid;
 using ag::tanh_v;
 
-void LSTMCell::init_params_(double scale, unsigned long long seed) {
+void LSTMCell::init_params_(float scale, unsigned long long seed) {
   const std::size_t I = input_size_, H = hidden_size_;
   W_ii_ = make_param_(randu_(I*H, scale, seed + 0), {I, H});
   W_if_ = make_param_(randu_(I*H, scale, seed + 1), {I, H});
@@ -53,10 +53,10 @@ void LSTMCell::init_params_(double scale, unsigned long long seed) {
     b_g_ = make_param_(randu_(H, scale, seed + 12), {H});
     b_o_ = make_param_(randu_(H, scale, seed + 13), {H});
   } else {
-    b_i_ = Variable(std::vector<double>{}, {0}, /*requires_grad=*/false);
-    b_f_ = Variable(std::vector<double>{}, {0}, /*requires_grad=*/false);
-    b_g_ = Variable(std::vector<double>{}, {0}, /*requires_grad=*/false);
-    b_o_ = Variable(std::vector<double>{}, {0}, /*requires_grad=*/false);
+    b_i_ = Variable(std::vector<float>{}, {0}, /*requires_grad=*/false);
+    b_f_ = Variable(std::vector<float>{}, {0}, /*requires_grad=*/false);
+    b_g_ = Variable(std::vector<float>{}, {0}, /*requires_grad=*/false);
+    b_o_ = Variable(std::vector<float>{}, {0}, /*requires_grad=*/false);
   }
 }
 
@@ -114,7 +114,7 @@ Variable LSTMCell::forward(const Variable& x) {
   const auto& xs = x.shape();
   if (xs.size() != 2) throw std::invalid_argument("LSTMCell::forward expects x shape [B,I]");
   const std::size_t B = xs[0], H = hidden_size_;
-  std::vector<double> zh(B*H, 0.0);
+  std::vector<float> zh(B*H, 0.0);
   Variable h0(zh, {B,H}, /*requires_grad=*/false);
   Variable c0(zh, {B,H}, /*requires_grad=*/false);
   return forward_step(x, h0, c0).first;
@@ -146,7 +146,7 @@ Variable LSTM::forward(const Variable& X) {
   // Helper: slice X[:,t,:] -> [B,I]
   auto slice_BTI_to_BI = [&](std::size_t t)->Variable {
     const auto& vals = X.value();
-    std::vector<double> out(B * input_size_);
+    std::vector<float> out(B * input_size_);
     for (std::size_t b = 0; b < B; ++b) {
       const std::size_t base = (b * T + t) * input_size_;
       for (std::size_t i = 0; i < input_size_; ++i) out[b*input_size_ + i] = vals[base + i];

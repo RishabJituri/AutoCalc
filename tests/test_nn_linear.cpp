@@ -9,8 +9,8 @@
 using ag::Variable;
 using ag::nn::Linear;
 
-static std::vector<double> ones(std::size_t n) { return std::vector<double>(n, 1.0); }
-static std::vector<double> zeros(std::size_t n) { return std::vector<double>(n, 0.0); }
+static std::vector<float> ones(std::size_t n) { return std::vector<float>(n, 1.0f); }
+static std::vector<float> zeros(std::size_t n) { return std::vector<float>(n, 0.0f); }
 
 TEST("nn/linear/shape_and_params") {
     const std::size_t In = 3, Out = 2, B = 4;
@@ -51,8 +51,8 @@ TEST("nn/linear/forward_bias_broadcast") {
 
     // Backward with seed of ones: dW should be 0, db should be B
     y.backward(ones(B*Out));
-    for (double gw : W.grad()) ASSERT_NEAR(gw, 0.0, 1e-12);
-    for (double gb : b.grad()) ASSERT_NEAR(gb, double(B), 1e-12);
+    for (float gw : W.grad()) ASSERT_NEAR(gw, 0.0f, 1e-12);
+    for (float gb : b.grad()) ASSERT_NEAR(gb, float(B), 1e-12);
 }
 
 TEST("nn/linear/backward_wrt_x_sum_loss") {
@@ -60,23 +60,23 @@ TEST("nn/linear/backward_wrt_x_sum_loss") {
     Linear lin(In, Out, /*bias=*/true, /*init_scale=*/0.05, /*seed=*/123ull);
 
     // x with known values
-    std::vector<double> xv(B*In);
-    std::iota(xv.begin(), xv.end(), 1.0); // 1,2,3,4,5,6
+    std::vector<float> xv(B*In);
+    std::iota(xv.begin(), xv.end(), 1.0f); // 1,2,3,4,5,6
     Variable x(xv, {B, In}, /*requires_grad=*/true);
 
     // Forward
     auto y = lin.forward(x);
 
     // Loss = sum(y)  -> seed is all-ones
-    const std::vector<double> seed = ones(B*Out);
+    const std::vector<float> seed = ones(B*Out);
     y.backward(seed);
 
     // Analytic d(sum(y))/dx = 1_row @ W^T = sum over columns of W, same for each batch row
     auto params = lin.parameters();
     const auto& Wv = params[0]->value(); // shape [In,Out] row-major
-    std::vector<double> expected_dx(In, 0.0);
+    std::vector<float> expected_dx(In, 0.0f);
     for (std::size_t i = 0; i < In; ++i) {
-        double s = 0.0;
+        float s = 0.0f;
         for (std::size_t j = 0; j < Out; ++j) s += Wv[i*Out + j];
         expected_dx[i] = s;
     }
@@ -98,12 +98,12 @@ TEST("nn/linear/recompute_equals_after_zero") {
     Variable& BIAS = *params[1];
 
     // Input
-    std::vector<double> xv(B*In);
-    for (std::size_t i = 0; i < xv.size(); ++i) xv[i] = double(i+1);
+    std::vector<float> xv(B*In);
+    for (std::size_t i = 0; i < xv.size(); ++i) xv[i] = float(i+1);
     Variable x(xv, {B, In}, /*requires_grad=*/true);
 
     auto y = lin.forward(x);
-    const std::vector<double> seed = ones(B*Out);
+    const std::vector<float> seed = ones(B*Out);
 
     // First backward
     y.backward(seed);
@@ -127,7 +127,7 @@ TEST("nn/linear/recompute_equals_after_zero") {
     ASSERT_TRUE(gW1.size() == gW2.size());
     ASSERT_TRUE(gb1.size() == gb2.size());
 
-    for (std::size_t i = 0; i < gx1.size(); ++i) ASSERT_NEAR(gx2[i], gx1[i], 1e-12);
-    for (std::size_t i = 0; i < gW1.size(); ++i) ASSERT_NEAR(gW2[i], gW1[i], 1e-12);
-    for (std::size_t i = 0; i < gb1.size(); ++i) ASSERT_NEAR(gb2[i], gb1[i], 1e-12);
+    for (std::size_t i = 0; i < gx1.size(); ++i) ASSERT_NEAR(gx2[i], gx1[i], 1e-6f);
+    for (std::size_t i = 0; i < gW1.size(); ++i) ASSERT_NEAR(gW2[i], gW1[i], 1e-6f);
+    for (std::size_t i = 0; i < gb1.size(); ++i) ASSERT_NEAR(gb2[i], gb1[i], 1e-6f);
 }

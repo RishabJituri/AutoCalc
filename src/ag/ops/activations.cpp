@@ -10,13 +10,13 @@ Variable relu(const Variable& X) {
   auto out = std::make_shared<Node>();
   out->shape = X.n->shape;
   out->value.resize(numel(out->shape));
-  out->grad.resize(numel(out->shape), 0.0);
+  out->grad.resize(numel(out->shape), 0.0f);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 
   for (std::size_t i = 0; i < out->value.size(); ++i) {
-    double v = X.n->value[i];
-    out->value[i] = v > 0.0 ? v : 0.0;
+    float v = static_cast<float>(X.n->value[i]);
+    out->value[i] = v > 0.0f ? v : 0.0f;
   }
 
   out->backward = [Xn = X.n, oweak = std::weak_ptr<Node>(out)]() {
@@ -24,8 +24,8 @@ Variable relu(const Variable& X) {
     Node* o = op.get();
     if (!Xn || !Xn->requires_grad) return;
     for (std::size_t i = 0; i < o->value.size(); ++i) {
-      double v = Xn->value[i];
-      Xn->grad[i] += (v > 0.0 ? 1.0 : 0.0) * o->grad[i];
+      float v = static_cast<float>(Xn->value[i]);
+      Xn->grad[i] += (v > 0.0f ? 1.0f : 0.0f) * static_cast<float>(o->grad[i]);
     }
   };
   return make_from_node(out);
@@ -35,12 +35,12 @@ Variable sigmoid(const Variable& X) {
   auto out = std::make_shared<Node>();
   out->shape = X.n->shape;
   out->value.resize(numel(out->shape));
-  out->grad.resize(numel(out->shape), 0.0);
+  out->grad.resize(numel(out->shape), 0.0f);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 
   for (std::size_t i = 0; i < out->value.size(); ++i) {
-    out->value[i] = 1.0 / (1.0 + std::exp(-X.n->value[i]));
+    out->value[i] = 1.0f / (1.0f + std::exp(-static_cast<float>(X.n->value[i])));
   }
 
   out->backward = [Xn = X.n, oweak = std::weak_ptr<Node>(out)]() {
@@ -48,8 +48,8 @@ Variable sigmoid(const Variable& X) {
     Node* o = op.get();
     if (!Xn || !Xn->requires_grad) return;
     for (std::size_t i = 0; i < o->value.size(); ++i) {
-      double y = o->value[i];                 // sigmoid(x) cached in forward
-      Xn->grad[i] += (y * (1.0 - y)) * o->grad[i];
+      float y = static_cast<float>(o->value[i]); // sigmoid(x) cached in forward
+      Xn->grad[i] += (y * (1.0f - y)) * static_cast<float>(o->grad[i]);
     }
   };
   return make_from_node(out);
@@ -59,12 +59,12 @@ Variable tanhv(const Variable& X) {
   auto out = std::make_shared<Node>();
   out->shape = X.n->shape;
   out->value.resize(numel(out->shape));
-  out->grad.resize(numel(out->shape), 0.0);
+  out->grad.resize(numel(out->shape), 0.0f);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 
   for (std::size_t i = 0; i < out->value.size(); ++i) {
-    out->value[i] = std::tanh(X.n->value[i]);
+    out->value[i] = std::tanh(static_cast<float>(X.n->value[i]));
   }
 
   out->backward = [Xn = X.n, oweak = std::weak_ptr<Node>(out)]() {
@@ -72,8 +72,8 @@ Variable tanhv(const Variable& X) {
     Node* o = op.get();
     if (!Xn || !Xn->requires_grad) return;
     for (std::size_t i = 0; i < o->value.size(); ++i) {
-      double y = o->value[i];                 // tanh(x)
-      Xn->grad[i] += (1.0 - y * y) * o->grad[i];
+      float y = static_cast<float>(o->value[i]); // tanh(x)
+      Xn->grad[i] += (1.0f - y * y) * static_cast<float>(o->grad[i]);
     }
   };
   return make_from_node(out);
@@ -83,12 +83,12 @@ Variable logv(const Variable& X) {
   auto out = std::make_shared<Node>();
   out->shape = X.n->shape;
   out->value.resize(numel(out->shape));
-  out->grad.resize(numel(out->shape), 0.0);
+  out->grad.resize(numel(out->shape), 0.0f);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 
   for (std::size_t i = 0; i < out->value.size(); ++i) {
-    out->value[i] = std::log(X.n->value[i]);  // domain: X>0
+    out->value[i] = std::log(static_cast<float>(X.n->value[i]));  // domain: X>0
   }
 
   out->backward = [Xn = X.n, oweak = std::weak_ptr<Node>(out)]() {
@@ -96,22 +96,22 @@ Variable logv(const Variable& X) {
     Node* o = op.get();
     if (!Xn || !Xn->requires_grad) return;
     for (std::size_t i = 0; i < o->value.size(); ++i) {
-      Xn->grad[i] += (1.0 / Xn->value[i]) * o->grad[i];
+      Xn->grad[i] += (1.0f / static_cast<float>(Xn->value[i])) * static_cast<float>(o->grad[i]);
     }
   };
   return make_from_node(out);
 }
 
-Variable clamp(const Variable& X, double lo, double hi) {
+Variable clamp(const Variable& X, float lo, float hi) {
   auto out = std::make_shared<Node>();
   out->shape = X.n->shape;
   out->value.resize(numel(out->shape));
-  out->grad.resize(numel(out->shape), 0.0);
+  out->grad.resize(numel(out->shape), 0.0f);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 
   for (std::size_t i = 0; i < out->value.size(); ++i) {
-    double v = X.n->value[i];
+    float v = static_cast<float>(X.n->value[i]);
     if (v < lo) v = lo;
     if (v > hi) v = hi;
     out->value[i] = v;
@@ -122,9 +122,9 @@ Variable clamp(const Variable& X, double lo, double hi) {
     Node* o = op.get();
     if (!Xn || !Xn->requires_grad) return;
     for (std::size_t i = 0; i < o->value.size(); ++i) {
-      double v = Xn->value[i];
-      double g = (v <= lo || v >= hi) ? 0.0 : 1.0;   // subgradient
-      Xn->grad[i] += g * o->grad[i];
+      float v = static_cast<float>(Xn->value[i]);
+      float g = (v <= lo || v >= hi) ? 0.0f : 1.0f;   // subgradient
+      Xn->grad[i] += g * static_cast<float>(o->grad[i]);
     }
   };
   return make_from_node(out);
