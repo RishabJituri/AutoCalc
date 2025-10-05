@@ -4,8 +4,10 @@
 #include "ag/nn/layers/lstm.hpp"
 #include "ag/ops/elementwise.hpp"
 #include "ag/ops/tensor_utils.hpp"
+#include "ag/parallel/parallel_for.hpp"
 
 #include <stdexcept>
+#include <cstring>
 
 namespace ag {
   // Small helpers built from existing elementwise ops
@@ -147,9 +149,20 @@ Variable LSTM::forward(const Variable& X) {
   auto slice_BTI_to_BI = [&](std::size_t t)->Variable {
     const auto& vals = X.value();
     std::vector<float> out(B * input_size_);
-    for (std::size_t b = 0; b < B; ++b) {
-      const std::size_t base = (b * T + t) * input_size_;
-      for (std::size_t i = 0; i < input_size_; ++i) out[b*input_size_ + i] = vals[base + i];
+    const std::size_t row_bytes = input_size_ * sizeof(float);
+    const std::size_t SERIAL_CUTOFF = 64;
+    if (B < SERIAL_CUTOFF) {
+      for (std::size_t b = 0; b < B; ++b) {
+        const std::size_t base = (b * T + t) * input_size_;
+        std::memcpy(&out[b*input_size_], &vals[base], row_bytes);
+      }
+    } else {
+      ag::parallel::parallel_for(B, /*grain=*/1, [&](std::size_t b0, std::size_t b1){
+        for (std::size_t b = b0; b < b1; ++b) {
+          const std::size_t base = (b * T + t) * input_size_;
+          std::memcpy(&out[b*input_size_], &vals[base], row_bytes);
+        }
+      });
     }
     // Inputs don’t require grad
     return Variable(out, {B, input_size_}, /*requires_grad=*/false);
@@ -179,16 +192,28 @@ Variable LSTM::forward(const Variable& X) {
     if (v.n && v.n->requires_grad) node->requires_grad = true;
   }
 
-  // forward write
-  for (std::size_t t = 0; t < T; ++t) {
-    const auto& hv = outs[t].value();             // [B,H]
-    for (std::size_t b = 0; b < B; ++b) {
-      const std::size_t base_out = (b * T + t) * hidden_size_;
-      const std::size_t base_in  = b * hidden_size_;
-      for (std::size_t k = 0; k < hidden_size_; ++k) {
-        node->value[base_out + k] = hv[base_in + k];
+  // forward write (parallel over timesteps)
+  const std::size_t SERIAL_T_CUTOFF = 8;
+  if (T < SERIAL_T_CUTOFF) {
+    for (std::size_t t = 0; t < T; ++t) {
+      const auto& hv = outs[t].value();             // [B,H]
+      for (std::size_t b = 0; b < B; ++b) {
+        const std::size_t base_out = (b * T + t) * hidden_size_;
+        const std::size_t base_in  = b * hidden_size_;
+        for (std::size_t k = 0; k < hidden_size_; ++k) node->value[base_out + k] = hv[base_in + k];
       }
     }
+  } else {
+    ag::parallel::parallel_for(T, /*grain=*/1, [&](std::size_t t0, std::size_t t1){
+      for (std::size_t t = t0; t < t1; ++t) {
+        const auto& hv = outs[t].value();
+        for (std::size_t b = 0; b < B; ++b) {
+          const std::size_t base_out = (b * T + t) * hidden_size_;
+          const std::size_t base_in  = b * hidden_size_;
+          for (std::size_t k = 0; k < hidden_size_; ++k) node->value[base_out + k] = hv[base_in + k];
+        }
+      }
+    });
   }
 
   // backward: split grad Y -> each outs[t]
@@ -196,16 +221,29 @@ Variable LSTM::forward(const Variable& X) {
   node->backward = [wnode, B, T, H = hidden_size_]() {
     auto sp = wnode.lock(); if (!sp) return;
     auto& g = sp->grad;
-    for (std::size_t t = 0; t < T; ++t) {
-      auto parent = sp->parents[t].get();
-      if (!parent || !parent->requires_grad) continue;
-      for (std::size_t b = 0; b < B; ++b) {
-        const std::size_t base_out = (b * T + t) * H;
-        const std::size_t base_in  = b * H;
-        for (std::size_t k = 0; k < H; ++k) {
-          parent->grad[base_in + k] += g[base_out + k];
+    const std::size_t SERIAL_T_CUTOFF_BWD = 8;
+    if (T < SERIAL_T_CUTOFF_BWD) {
+      for (std::size_t t = 0; t < T; ++t) {
+        auto parent = sp->parents[t].get();
+        if (!parent || !parent->requires_grad) continue;
+        for (std::size_t b = 0; b < B; ++b) {
+          const std::size_t base_out = (b * T + t) * H;
+          const std::size_t base_in  = b * H;
+          for (std::size_t k = 0; k < H; ++k) parent->grad[base_in + k] += g[base_out + k];
         }
       }
+    } else {
+      ag::parallel::parallel_for(T, /*grain=*/1, [&](std::size_t t0, std::size_t t1){
+        for (std::size_t t = t0; t < t1; ++t) {
+          auto parent = sp->parents[t].get();
+          if (!parent || !parent->requires_grad) continue;
+          for (std::size_t b = 0; b < B; ++b) {
+            const std::size_t base_out = (b * T + t) * H;
+            const std::size_t base_in  = b * H;
+            for (std::size_t k = 0; k < H; ++k) parent->grad[base_in + k] += g[base_out + k];
+          }
+        }
+      });
     }
   };
 

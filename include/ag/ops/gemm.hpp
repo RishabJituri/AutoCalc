@@ -124,6 +124,89 @@ inline void microkernel_8x8_f32(const float* Ap, const float* Bp,
   }
 }
 
+inline void packB_f32_strided(
+    const float* B, int rows, int cols, int rs, int cs,
+    float* Bp, int NR)
+{
+  const int nb = (cols + NR - 1) / NR;
+  float* out = Bp;
+  for (int bj = 0; bj < nb; ++bj) {
+    const int j0 = bj * NR;
+    for (int k = 0; k < rows; ++k) {
+      for (int jj = 0; jj < NR; ++jj) {
+        const int j = j0 + jj;
+        if (j < cols) {
+          out[jj] = *(B + std::size_t(k) * rs + std::size_t(j) * cs);
+        } else {
+          out[jj] = 0.0f;
+        }
+      }
+      out += NR;
+    }
+  }
+}
+
+inline void packA_f32_strided(
+    const float* A, int rows, int cols, int rs, int cs,
+    float* Ap, int MR)
+{
+  const int mb = (rows + MR - 1) / MR;
+  for (int bi = 0; bi < mb; ++bi) {
+    const int i0 = bi * MR;
+    const int ib = std::min(MR, rows - i0);
+    for (int p = 0; p < cols; ++p) {
+      for (int ii = 0; ii < MR; ++ii) {
+        if (ii < ib) {
+          Ap[ii] = *(A + std::size_t(i0 + ii) * rs + std::size_t(p) * cs);
+        } else {
+          Ap[ii] = 0.0f;
+        }
+      }
+      Ap += MR;
+    }
+  }
+}
+
+// Leaf entrypoint: consumes a pre-packed B panel (kc x NR-aligned) and computes a single
+// small tile C(ib x jb) where ib <= MR and jb <= NR. This function is single-threaded
+// and expects Bp_tile to point at the start of the kc×NR tile for the target column tile.
+inline void sgemm_packedB_f32(int ib, int jb, int kc,
+                              const float* Ablk, int lda,
+                              const float* Bp_tile, // pointer to kc x NR packed block
+                              float* Cblk, int ldc,
+                              float alpha = 1.0f, float beta = 1.0f) {
+  if (ib <= 0 || jb <= 0 || kc <= 0) return;
+  const int MR_local = AG_GEMM_MR;
+  const int NR_local = AG_GEMM_NR;
+
+  // per-thread reusable pack buffer for A (MR x kc)
+  thread_local std::vector<float> Ap_buf;
+  const std::size_t need = std::size_t(MR_local) * std::size_t(kc);
+  if (Ap_buf.size() < need) Ap_buf.resize(need);
+
+  // Pack Ablk (ib x kc) into MR-sized rows
+  detail::packA_f32(Ablk, lda, Ap_buf.data(), ib, kc, MR_local);
+
+  // Compute microkernel product
+  float Ctmp[AG_GEMM_MR * AG_GEMM_NR];
+  // Initialize accumulator to 0
+  for (int ii = 0; ii < MR_local * NR_local; ++ii) Ctmp[ii] = 0.0f;
+
+  // microkernel expects MR x kc packed A and kc x NR packed B
+  detail::microkernel_8x8_f32(Ap_buf.data(), Bp_tile, Ctmp, NR_local, kc);
+
+  // Write results into Cblk honoring ib/jb and alpha/beta
+  for (int i = 0; i < ib; ++i) {
+    float* crow = Cblk + std::size_t(i) * ldc;
+    const float* crow_tmp = Ctmp + i * NR_local;
+    if (beta == 0.0f) {
+      for (int j = 0; j < jb; ++j) crow[j] = alpha * crow_tmp[j];
+    } else {
+      for (int j = 0; j < jb; ++j) crow[j] += alpha * crow_tmp[j];
+    }
+  }
+}
+
 } // namespace detail
 
 // C(MxN) += A(MxK) * B(KxN)
@@ -199,6 +282,83 @@ inline void sgemm_f32(int M,int N,int K,
 }
 
 // Transpose-aware sgemm_f32 overload
+// inline void sgemm_f32(int M, int N, int K,
+//                       Trans transA, Trans transB,
+//                       const float* A, int lda,
+//                       const float* B, int ldb,
+//                       float* C, int ldc,
+//                       float alpha=1.0f, float beta=1.0f)
+// {
+//   if (M <= 0 || N <= 0 || K <= 0) return;
+
+//   // Scale C by beta once up front
+//   if (beta != 1.0f) {
+//     for (int i = 0; i < M; ++i) {
+//       float* crow = C + std::size_t(i) * ldc;
+//       for (int j = 0; j < N; ++j) crow[j] *= beta;
+//     }
+//   }
+
+//   if (alpha == 0.0f) return;
+
+//   // Fast path: NN uses the tuned kernel
+//   if (transA == Trans::N && transB == Trans::N) {
+//     if (alpha == 1.0f) {
+//       sgemm_f32(M, N, K, A, lda, B, ldb, C, ldc);
+//       return;
+//     } else {
+//       // Compute T = A*B, then C += alpha*T
+//       std::vector<float> T(std::size_t(M) * N, 0.0f);
+//       sgemm_f32(M, N, K, A, lda, B, ldb, T.data(), N);
+//       for (int i = 0; i < M; ++i) {
+//         float* crow = C + std::size_t(i) * ldc;
+//         const float* trow = T.data() + std::size_t(i) * N;
+//         for (int j = 0; j < N; ++j) crow[j] += alpha * trow[j];
+//       }
+//       return;
+//     }
+//   }
+
+//   // Materialize transposed operands into small temporaries (full matrices for now)
+//   std::vector<float> Ause, Buse;
+//   const float* A_mat = A;
+//   const float* B_mat = B;
+//   int lda_use = lda, ldb_use = ldb;
+
+//   if (transA == Trans::T) {
+//     // Ause = transpose of A (KxM)
+//     Ause.resize(std::size_t(M) * K);
+//     for (int i = 0; i < M; ++i)
+//       for (int k = 0; k < K; ++k)
+//         Ause[std::size_t(i) * K + k] = A[std::size_t(k) * lda + i];
+//     A_mat = Ause.data();
+//     lda_use = K;
+//   }
+//   if (transB == Trans::T) {
+//     // Buse = transpose of B (N x K)
+//     Buse.resize(std::size_t(K) * N);
+//     for (int k = 0; k < K; ++k)
+//       for (int j = 0; j < N; ++j)
+//         Buse[std::size_t(k) * N + j] = B[std::size_t(j) * ldb + k];
+//     B_mat = Buse.data();
+//     ldb_use = N;
+//   }
+
+//   // Now call the NN kernel with possibly materialized A/B
+//   if (alpha == 1.0f) {
+//     sgemm_f32(M, N, K, A_mat, lda_use, B_mat, ldb_use, C, ldc);
+//   } else {
+//     std::vector<float> T(std::size_t(M) * N, 0.0f);
+//     sgemm_f32(M, N, K, A_mat, lda_use, B_mat, ldb_use, T.data(), N);
+//     for (int i = 0; i < M; ++i) {
+//       float* crow = C + std::size_t(i) * ldc;
+//       const float* trow = T.data() + std::size_t(i) * N;
+//       for (int j = 0; j < N; ++j) crow[j] += alpha * trow[j];
+//     }
+//   }
+// }
+
+// Transpose-aware sgemm_f32 overload (copy-free NT/TN/TT)
 inline void sgemm_f32(int M, int N, int K,
                       Trans transA, Trans transB,
                       const float* A, int lda,
@@ -215,7 +375,6 @@ inline void sgemm_f32(int M, int N, int K,
       for (int j = 0; j < N; ++j) crow[j] *= beta;
     }
   }
-
   if (alpha == 0.0f) return;
 
   // Fast path: NN uses the tuned kernel
@@ -224,11 +383,10 @@ inline void sgemm_f32(int M, int N, int K,
       sgemm_f32(M, N, K, A, lda, B, ldb, C, ldc);
       return;
     } else {
-      // Compute T = A*B, then C += alpha*T
       std::vector<float> T(std::size_t(M) * N, 0.0f);
       sgemm_f32(M, N, K, A, lda, B, ldb, T.data(), N);
       for (int i = 0; i < M; ++i) {
-        float* crow = C + std::size_t(i) * ldc;
+        float* crow = C + std::size_t(i) * N;
         const float* trow = T.data() + std::size_t(i) * N;
         for (int j = 0; j < N; ++j) crow[j] += alpha * trow[j];
       }
@@ -236,41 +394,77 @@ inline void sgemm_f32(int M, int N, int K,
     }
   }
 
-  // Materialize transposed operands into small temporaries (full matrices for now)
-  std::vector<float> Ause, Buse;
-  const float* A_mat = A;
-  const float* B_mat = B;
-  int lda_use = lda, ldb_use = ldb;
+  // --- Stride-aware GEMM for NT/TN/TT ---
+  const auto tiles = pick_tiles_runtime(sizeof(float));
+  const int MR = tiles.MR, NR = tiles.NR;
+  const int KC = tiles.KC, MC = tiles.MC, NC = tiles.NC;
 
-  if (transA == Trans::T) {
-    // Ause = transpose of A (KxM)
-    Ause.resize(std::size_t(M) * K);
-    for (int i = 0; i < M; ++i)
-      for (int k = 0; k < K; ++k)
-        Ause[std::size_t(i) * K + k] = A[std::size_t(k) * lda + i];
-    A_mat = Ause.data();
-    lda_use = K;
-  }
-  if (transB == Trans::T) {
-    // Buse = transpose of B (N x K)
-    Buse.resize(std::size_t(K) * N);
-    for (int k = 0; k < K; ++k)
-      for (int j = 0; j < N; ++j)
-        Buse[std::size_t(k) * N + j] = B[std::size_t(j) * ldb + k];
-    B_mat = Buse.data();
-    ldb_use = N;
-  }
+  // Logical shapes and strides for A
+  int A_rs = (transA == Trans::N) ? lda : 1;
+  int A_cs = (transA == Trans::N) ? 1   : lda;
 
-  // Now call the NN kernel with possibly materialized A/B
-  if (alpha == 1.0f) {
-    sgemm_f32(M, N, K, A_mat, lda_use, B_mat, ldb_use, C, ldc);
-  } else {
-    std::vector<float> T(std::size_t(M) * N, 0.0f);
-    sgemm_f32(M, N, K, A_mat, lda_use, B_mat, ldb_use, T.data(), N);
-    for (int i = 0; i < M; ++i) {
-      float* crow = C + std::size_t(i) * ldc;
-      const float* trow = T.data() + std::size_t(i) * N;
-      for (int j = 0; j < N; ++j) crow[j] += alpha * trow[j];
+  // Logical shapes and strides for B
+  int B_rs = (transB == Trans::N) ? ldb : 1;
+  int B_cs = (transB == Trans::N) ? 1   : ldb;
+
+  for (int jc = 0; jc < N; jc += NC) {
+    const int nc = std::min(NC, N - jc);
+
+    for (int pc = 0; pc < K; pc += KC) {
+      const int kc = std::min(KC, K - pc);
+
+      // B panel base pointer
+      const float* Bblk = B + std::size_t(pc) * B_rs + std::size_t(jc) * B_cs;
+
+      // Pack B panel
+      const int nb_cols = (nc + NR - 1) / NR;
+      std::size_t Bp_elems = std::size_t(kc) * nb_cols * NR;
+      std::vector<float> Bp(Bp_elems);
+      detail::packB_f32_strided(Bblk, kc, nc, B_rs, B_cs, Bp.data(), NR);
+
+      for (int ic = 0; ic < M; ic += MC) {
+        const int mc = std::min(MC, M - ic);
+        const int mb = (mc + MR - 1) / MR;
+        const int nb_tiles = (nc + NR - 1) / NR;
+        std::size_t total_tiles = std::size_t(mb) * nb_tiles;
+
+        ag::parallel::parallel_for(total_tiles, /*grain=*/0, [&](std::size_t t0, std::size_t t1){
+          struct Scratch { std::vector<float> Ap; };
+          thread_local Scratch s;
+
+          for (std::size_t t = t0; t < t1; ++t) {
+            const int bi = int(t % mb);
+            const int bj = int(t / mb);
+            const int i0 = ic + bi * MR;
+            const int j0 = jc + bj * NR;
+            const int ib = std::min(MR, M - i0);
+            const int jb = std::min(NR, N - j0);
+
+            std::size_t need = std::size_t(MR) * kc;
+            if (s.Ap.size() < need) s.Ap.resize(need);
+
+            // A panel base pointer
+            const float* Ablk = A + std::size_t(i0) * A_rs + std::size_t(pc) * A_cs;
+
+            // Pack A panel
+            detail::packA_f32_strided(Ablk, ib, kc, A_rs, A_cs, s.Ap.data(), MR);
+
+            // B panel for this column tile
+            const float* Bp_tile = Bp.data() + std::size_t(bj) * (kc * NR);
+
+            // Compute into temp 8x8 then add tails into C
+            float Ctmp[8*8] = {0};
+            detail::microkernel_8x8_f32(s.Ap.data(), Bp_tile, Ctmp, 8, kc);
+
+            float* Cij = C + std::size_t(i0) * ldc + j0;
+            for (int i = 0; i < ib; ++i) {
+              float* crow = Cij + std::size_t(i) * ldc;
+              const float* crow_tmp = Ctmp + i * 8;
+              for (int j = 0; j < jb; ++j) crow[j] += alpha * crow_tmp[j];
+            }
+          }
+        });
+      }
     }
   }
 }

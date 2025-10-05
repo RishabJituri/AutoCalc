@@ -98,35 +98,72 @@ static void matmul_tiled_core(const float* A, int lda,
 
   const int th = iceil_div(M, tileM);
   const int tw = iceil_div(N, tileN);
-  const std::size_t T = std::size_t(th) * tw;
 
-  ag::parallel::parallel_for(T, tp.grain_in_tiles, [&](std::size_t t0, std::size_t t1) {
-    for (std::size_t t = t0; t < t1; ++t) {
-      int ih, iw; tile_index_to_coords(t, th, tw, ih, iw);
-      const int i0 = ih * tileM;
-      const int j0 = iw * tileN;
-      const int i1 = std::min(i0 + tileM, M);
-      const int j1 = std::min(j0 + tileN, N);
-      const int Mb = i1 - i0;
-      const int Nb = j1 - j0;
-      if (Mb <= 0 || Nb <= 0) continue;
+  // Outer blocking over column tiles (j / tileN) and reduction over K so B panels
+  // (pc,jc) can be packed once and reused across row-tiles.
+  for (int j0_tile = 0; j0_tile < tw; ++j0_tile) {
+    const int j0 = j0_tile * tileN;
+    const int j1 = std::min(j0 + tileN, N);
+    const int Nb = j1 - j0;
+    if (Nb <= 0) continue;
 
-      bool first_panel = true;
-      for (int k0 = 0; k0 < K; k0 += kc) {
-        const int k1 = std::min(k0 + kc, K);
-        const int Kb = k1 - k0;
+    for (int p0 = 0; p0 < K; p0 += kc) {
+      const int p1 = std::min(p0 + kc, K);
+      const int Kb = p1 - p0;
+      if (Kb <= 0) continue;
 
-        const float* Ablk = ptrA(A, lda, i0, k0);
-        const float* Bblk = ptrB(B, ldb, k0, j0);
-        float*       Cblk = ptrC(C, ldc, i0, j0);
+      // Pack B once for this (p0, j0) panel into Bp
+      const float* Bblk = ptrB(B, ldb, p0, j0); // (Kb x Nb)
 
-        const float alpha = 1.0f;
-        const float beta  = first_panel ? 0.0f : 1.0f;
-        ag::ops::sgemm_f32(Mb, Nb, Kb, Ablk, lda, Bblk, ldb, Cblk, ldc, alpha, beta);
-        first_panel = false;
-      }
+      // Get microkernel NR from gemm macros
+#ifdef AG_GEMM_NR
+      const int NR = AG_GEMM_NR;
+#else
+      const int NR = 8;
+#endif
+      const int nb_cols = (Nb + NR - 1) / NR;
+      const std::size_t Bp_elems = std::size_t(Kb) * nb_cols * NR;
+      std::vector<float> Bp(Bp_elems);
+      ag::ops::detail::packB_f32(Bblk, ldb, Bp.data(), Kb, Nb, NR);
+
+      // Parallelize over row tile index (ih)
+      const std::size_t total_row_tiles = std::size_t(th);
+      ag::parallel::parallel_for(total_row_tiles, tp.grain_in_tiles, [&](std::size_t t0, std::size_t t1){
+        for (std::size_t t = t0; t < t1; ++t) {
+          const int ih = int(t);
+          const int i0 = ih * tileM;
+          const int i1 = std::min(i0 + tileM, M);
+          const int Mb = i1 - i0;
+          if (Mb <= 0) continue;
+
+          const int MR = (int)AG_GEMM_MR;
+          const int mb = (Mb + MR - 1) / MR;
+          const int nb_tiles = (Nb + NR - 1) / NR;
+
+          for (int bi = 0; bi < mb; ++bi) {
+            const int sub_i0 = i0 + bi * MR;
+            const int ib = std::min(MR, M - sub_i0);
+
+            for (int bj = 0; bj < nb_tiles; ++bj) {
+              const int sub_j0 = j0 + bj * NR;
+              const int jb = std::min(NR, N - sub_j0);
+
+              // Pointers into A and C
+              const float* Ablk = ptrA(A, lda, sub_i0, p0); // (ib x Kb)
+              float* Cblk = ptrC(C, ldc, sub_i0, sub_j0);   // (ib x jb)
+
+              // Bp_tile points at (Kb x NR) block for this column tile
+              const float* Bp_tile = Bp.data() + std::size_t(bj) * (std::size_t(Kb) * NR);
+
+              // Single-threaded leaf call: packs A (per-thread) and runs microkernel
+              ag::ops::detail::sgemm_packedB_f32(ib, jb, Kb, Ablk, lda, Bp_tile, Cblk, ldc,
+                                                 1.0f, (p0==0 ? 0.0f : 1.0f));
+            }
+          }
+        }
+      });
     }
-  });
+  }
 }
 
 // ---- Batched matmul with broadcasting over leading dims ----

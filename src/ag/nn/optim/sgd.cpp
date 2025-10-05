@@ -1,24 +1,102 @@
 #include "ag/nn/optim/sgd.hpp"
+#include "ag/parallel/parallel_for.hpp"
 #include <algorithm>
+#include <vector>
 
 namespace ag::nn {
 
 void SGD::step(ag::nn::Module& m) {
   auto params = m.parameters();                 // std::vector<ag::Variable*>
+
+  struct Block {
+    float* w;
+    float* g;
+    float* v;
+    std::size_t n;
+  };
+
+  std::vector<Block> blocks;
+  blocks.reserve(params.size());
+
+  // Single-threaded: ensure velocity entries and build block views
   for (ag::Variable* p : params) {
     ag::Node* key = p->n.get();
-    auto& v = velocity[key];
-    if (v.size() != p->n->value.size()) v.assign(p->n->value.size(), 0.0f);
+    auto& vel = velocity[key];
+    const std::size_t n = p->n->value.size();
+    if (vel.size() != n) vel.assign(n, 0.0f);
+    blocks.push_back(Block{ p->n->value.data(), p->n->grad.data(), vel.data(), n });
+  }
 
-    for (std::size_t i = 0; i < p->n->value.size(); ++i) {
-      float g = p->n->grad[i];
-      if (weight_decay != 0.0f) g += weight_decay * p->n->value[i];  // L2
-      v[i] = momentum * v[i] + g;
-      const float stepdir = nesterov ? (momentum * v[i] + g) : v[i];
-      p->n->value[i] -= lr * stepdir;
+  // Hoist hyperparams
+  const float lr_ = lr;
+  const float mu  = momentum;
+  const float wd  = weight_decay;
+  const bool use_nest = nesterov;
+
+  // Serial update body for a block
+  auto serial_update = [&](Block& b) {
+    float* __restrict__ W = b.w;
+    float* __restrict__ G = b.g;
+    float* __restrict__ V = b.v;
+    const std::size_t N = b.n;
+    if (wd != 0.0f) {
+      for (std::size_t i = 0; i < N; ++i) {
+        float gi = G[i] + wd * W[i];
+        float vi = (V[i] = mu * V[i] + gi);
+        const float step = use_nest ? (mu * vi + gi) : vi;
+        W[i] -= lr_ * step;
+        G[i] = 0.0f;
+      }
+    } else {
+      for (std::size_t i = 0; i < N; ++i) {
+        float gi = G[i];
+        float vi = (V[i] = mu * V[i] + gi);
+        const float step = use_nest ? (mu * vi + gi) : vi;
+        W[i] -= lr_ * step;
+        G[i] = 0.0f;
+      }
     }
-    std::fill(p->n->grad.begin(), p->n->grad.end(), 0.0f);
+  };
+
+  const std::size_t P = blocks.size();
+  const std::size_t threads = std::max<std::size_t>(1, ag::parallel::get_max_threads());
+  const std::size_t inner_cutoff_elems = (1u << 16) / sizeof(float); // ~64KB
+
+  if (P >= threads) {
+    // Parallel over parameters
+    ag::parallel::parallel_for(P, /*grain=*/1, [&](std::size_t b0, std::size_t b1){
+      for (std::size_t bi = b0; bi < b1; ++bi) serial_update(blocks[bi]);
+    });
+  } else {
+    // Few parameters: for large tensors, parallelize inner loop
+    for (std::size_t bi = 0; bi < P; ++bi) {
+      Block& b = blocks[bi];
+      if (b.n < inner_cutoff_elems) { serial_update(b); continue; }
+      // inner parallel update
+      ag::parallel::parallel_for(b.n, /*grain=*/1024, [&](std::size_t i0, std::size_t i1){
+        float* __restrict__ W = b.w;
+        float* __restrict__ G = b.g;
+        float* __restrict__ V = b.v;
+        if (wd != 0.0f) {
+          for (std::size_t i = i0; i < i1; ++i) {
+            float gi = G[i] + wd * W[i];
+            float vi = (V[i] = mu * V[i] + gi);
+            const float step = use_nest ? (mu * vi + gi) : vi;
+            W[i] -= lr_ * step;
+            G[i] = 0.0f;
+          }
+        } else {
+          for (std::size_t i = i0; i < i1; ++i) {
+            float gi = G[i];
+            float vi = (V[i] = mu * V[i] + gi);
+            const float step = use_nest ? (mu * vi + gi) : vi;
+            W[i] -= lr_ * step;
+            G[i] = 0.0f;
+          }
+        }
+      });
+    }
   }
 }
 
-} // namespace ag::optim
+} // namespace ag::nn

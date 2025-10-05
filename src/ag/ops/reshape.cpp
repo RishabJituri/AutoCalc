@@ -1,5 +1,6 @@
 #include "ag/ops/reshape.hpp"
 #include "ag/ops/tensor_utils.hpp"
+#include "ag/parallel/parallel_for.hpp"
 #include <numeric>
 
 namespace ag {
@@ -17,8 +18,24 @@ Variable flatten(const Variable& X, std::size_t start_dim) {
 
   auto out = std::make_shared<Node>();
   out->shape = {prefix, suffix};
-  out->value = X.n->value;               // same data layout; copy is fine
-  out->grad.assign(numel(out->shape), 0.0);
+
+  const std::size_t N = prefix * suffix;
+  out->value.resize(N);
+
+  // Forward copy: parallel for large tensors
+  const std::size_t COPY_SERIAL_CUTOFF = 4096;
+  const std::size_t COPY_GRAIN = 1024;
+  if (N < COPY_SERIAL_CUTOFF) {
+    std::copy(X.n->value.begin(), X.n->value.end(), out->value.begin());
+  } else {
+    const auto xin = X.n->value.data();
+    auto outp = out->value.data();
+    ag::parallel::parallel_for(N, COPY_GRAIN, [&](std::size_t i0, std::size_t i1){
+      for (std::size_t i = i0; i < i1; ++i) outp[i] = xin[i];
+    });
+  }
+
+  out->grad.assign(N, 0.0);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 
@@ -27,9 +44,19 @@ Variable flatten(const Variable& X, std::size_t start_dim) {
     ag::Node* o = op.get();
 
     if (!Xn || !Xn->requires_grad) return;
-    // 1-1 mapping of elements
-    for (std::size_t i = 0; i < o->grad.size(); ++i) {
-      Xn->grad[i] += o->grad[i];
+    if (Xn->grad.size() != Xn->value.size()) Xn->grad.assign(Xn->value.size(), 0.0f);
+
+    const std::size_t N = o->grad.size();
+    const std::size_t COPY_SERIAL_CUTOFF = 4096;
+    const std::size_t COPY_GRAIN = 1024;
+    if (N < COPY_SERIAL_CUTOFF) {
+      for (std::size_t i = 0; i < N; ++i) Xn->grad[i] += o->grad[i];
+    } else {
+      const auto gin = o->grad.data();
+      auto gout = Xn->grad.data();
+      ag::parallel::parallel_for(N, COPY_GRAIN, [&](std::size_t i0, std::size_t i1){
+        for (std::size_t i = i0; i < i1; ++i) gout[i] += static_cast<float>(gin[i]);
+      });
     }
   };
   return make_from_node(out);
@@ -55,8 +82,24 @@ Variable reshape(const Variable& X, const std::vector<std::size_t>& new_shape) {
 
   auto out = std::make_shared<Node>();
   out->shape = new_shape;
-  out->value = X.n->value;                // same data layout (row-major), copy ok
-  out->grad.assign(new_elems, 0.0);
+
+  const std::size_t N = new_elems;
+  out->value.resize(N);
+
+  // Forward copy (parallel when large)
+  const std::size_t COPY_SERIAL_CUTOFF = 4096;
+  const std::size_t COPY_GRAIN = 1024;
+  if (N < COPY_SERIAL_CUTOFF) {
+    std::copy(X.n->value.begin(), X.n->value.end(), out->value.begin());
+  } else {
+    const auto xin = X.n->value.data();
+    auto outp = out->value.data();
+    ag::parallel::parallel_for(N, COPY_GRAIN, [&](std::size_t i0, std::size_t i1){
+      for (std::size_t i = i0; i < i1; ++i) outp[i] = xin[i];
+    });
+  }
+
+  out->grad.assign(N, 0.0);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 
@@ -64,9 +107,19 @@ Variable reshape(const Variable& X, const std::vector<std::size_t>& new_shape) {
     auto op = oweak.lock(); if (!op) return;
     ag::Node* o = op.get();
     if (!Xn || !Xn->requires_grad) return;
-    // 1-1 element mapping
-    for (std::size_t i = 0; i < o->grad.size(); ++i) {
-      Xn->grad[i] += o->grad[i];
+    if (Xn->grad.size() != Xn->value.size()) Xn->grad.assign(Xn->value.size(), 0.0f);
+
+    const std::size_t N = o->grad.size();
+    const std::size_t COPY_SERIAL_CUTOFF = 4096;
+    const std::size_t COPY_GRAIN = 1024;
+    if (N < COPY_SERIAL_CUTOFF) {
+      for (std::size_t i = 0; i < N; ++i) Xn->grad[i] += o->grad[i];
+    } else {
+      const auto gin = o->grad.data();
+      auto gout = Xn->grad.data();
+      ag::parallel::parallel_for(N, COPY_GRAIN, [&](std::size_t i0, std::size_t i1){
+        for (std::size_t i = i0; i < i1; ++i) gout[i] += static_cast<float>(gin[i]);
+      });
     }
   };
   return make_from_node(out);

@@ -1,6 +1,8 @@
 #include "ag/nn/loss.hpp"
 #include "ag/ops/stats.hpp"
 #include "ag/ops/elementwise.hpp"
+#include "ag/ops/activations.hpp"
+#include "ag/parallel/parallel_for.hpp"
 #include <cmath>
 #include <stdexcept>
 #include <memory>
@@ -39,24 +41,43 @@ Variable cross_entropy(const Variable& logits, const std::vector<std::size_t>& t
 
   // backward: dL/dlogits = (softmax - one_hot) / B
   std::weak_ptr<Node> oweak = loss;
-  loss->backward = [Xn = logits.n, B, C, targets, oweak]() {
+  loss->backward = [Xn = logits.n, LSEn = LSE.n, B, C, targets, oweak]() {
     if (!Xn || !Xn->requires_grad) return;
     auto op = oweak.lock(); if (!op) return;
     Node* o = op.get();
     const float seed = o->grad[0];  // scalar upstream grad
 
-    for (std::size_t b = 0; b < B; ++b) {
-      // stable softmax
-      float m = -1e300;
-      for (std::size_t c = 0; c < C; ++c) m = std::max(m, Xn->value[b*C + c]);
-      float Z = 0.0;
-      for (std::size_t c = 0; c < C; ++c) Z += std::exp(Xn->value[b*C + c] - m);
+    // ensure grad buffer allocated
+    if (Xn->grad.size() != Xn->value.size()) Xn->grad.assign(Xn->value.size(), 0.0f);
 
-      for (std::size_t c = 0; c < C; ++c) {
-        float p = std::exp(Xn->value[b*C + c] - m) / Z;
-        float g = p - (c == targets[b] ? 1.0 : 0.0);
-        Xn->grad[b*C + c] += (g / float(B)) * seed;
+    const std::size_t SERIAL_CUTOFF = 64;
+    if (B < SERIAL_CUTOFF) {
+      for (std::size_t b = 0; b < B; ++b) {
+        const float lse = static_cast<float>(LSEn->value[b]);
+        float Z = 0.0f;
+        for (std::size_t c = 0; c < C; ++c) Z += std::exp(Xn->value[b*C + c] - lse);
+        const float norm = (seed / float(B));
+        for (std::size_t c = 0; c < C; ++c) {
+          float p = std::exp(Xn->value[b*C + c] - lse) / Z;
+          float g = p - (c == targets[b] ? 1.0f : 0.0f);
+          Xn->grad[b*C + c] += g * norm;
+        }
       }
+    } else {
+      const std::size_t GRAIN = 1;
+      ag::parallel::parallel_for(B, GRAIN, [&](std::size_t b0, std::size_t b1){
+        for (std::size_t b = b0; b < b1; ++b) {
+          const float lse = static_cast<float>(LSEn->value[b]);
+          float Z = 0.0f;
+          for (std::size_t c = 0; c < C; ++c) Z += std::exp(Xn->value[b*C + c] - lse);
+          const float norm = (seed / float(B));
+          for (std::size_t c = 0; c < C; ++c) {
+            float p = std::exp(Xn->value[b*C + c] - lse) / Z;
+            float g = p - (c == targets[b] ? 1.0f : 0.0f);
+            Xn->grad[b*C + c] += g * norm;
+          }
+        }
+      });
     }
   };
 

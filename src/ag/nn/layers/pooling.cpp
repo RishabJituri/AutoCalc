@@ -1,5 +1,6 @@
 #include "ag/nn/layers/pooling.hpp"
 #include "ag/ops/tensor_utils.hpp"
+#include "ag/parallel/parallel_for.hpp"
 #include <stdexcept>
 #include <cmath>
 #include <limits>
@@ -29,68 +30,107 @@ Variable MaxPool2d::forward(const Variable& X) {
   auto out = std::make_shared<Node>();
   out->shape = yshape;
   out->value.assign(numel(yshape), -std::numeric_limits<float>::infinity());
-  out->grad.assign(numel(yshape), 0.0f);
+  if (X.n->requires_grad) out->grad.assign(numel(yshape), 0.0f);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 
   const auto xstr = strides_for(xs);
   const auto ystr = strides_for(yshape);
 
-  // forward: compute max with padding treated as -inf
-  for (std::size_t b=0;b<B;++b)
-  for (std::size_t c=0;c<C;++c)
-  for (std::size_t oh=0;oh<H_out;++oh)
-  for (std::size_t ow=0;ow<W_out;++ow) {
-    float m = -std::numeric_limits<float>::infinity();
-    for (std::size_t kh=0;kh<kH;++kh)
-    for (std::size_t kw=0;kw<kW;++kw) {
-      long long ih = (long long)oh*(long long)sH + (long long)kh - (long long)pH;
-      long long iw = (long long)ow*(long long)sW + (long long)kw - (long long)pW;
-      if (ih<0 || iw<0 || ih>=(long long)H || iw>=(long long)W) continue;
-      std::size_t xi = b*xstr[0] + c*xstr[1] + (std::size_t)ih*xstr[2] + (std::size_t)iw*xstr[3];
-      m = std::max(m, X.n->value[xi]);
+  // forward: parallel over output elements
+  const std::size_t outN = numel(yshape);
+  const std::size_t OUT_GRAIN = 1024;
+  ag::parallel::parallel_for(outN, OUT_GRAIN, [&](std::size_t i0, std::size_t i1){
+    const std::size_t strideB = C * H_out * W_out;
+    const std::size_t strideC = H_out * W_out;
+    const std::size_t strideH = W_out;
+    for (std::size_t lin = i0; lin < i1; ++lin) {
+      std::size_t tmp = lin;
+      const std::size_t b = tmp / strideB; tmp %= strideB;
+      const std::size_t c = tmp / strideC; tmp %= strideC;
+      const std::size_t oh = tmp / strideH;
+      const std::size_t ow = tmp % strideH;
+
+      const std::size_t base = b * xstr[0] + c * xstr[1];
+      const std::size_t h0 = (oh * sH > pH) ? (oh * sH - pH) : 0;
+      const std::size_t h1 = std::min(h0 + kH, H);
+      const std::size_t w0 = (ow * sW > pW) ? (ow * sW - pW) : 0;
+      const std::size_t w1 = std::min(w0 + kW, W);
+
+      float m = -std::numeric_limits<float>::infinity();
+      for (std::size_t ih = h0; ih < h1; ++ih) {
+        const std::size_t row = base + ih * xstr[2];
+        for (std::size_t iw = w0; iw < w1; ++iw) {
+          const std::size_t xi = row + iw * xstr[3];
+          m = std::max(m, X.n->value[xi]);
+        }
+      }
+      out->value[lin] = m;
     }
-    out->value[b*ystr[0] + c*ystr[1] + oh*ystr[2] + ow*ystr[3]] = m;
-  }
+  });
 
-out->backward = [this, Xn = X.n, xs, yshape,
-                 oweak = std::weak_ptr<ag::Node>(out)]() {
-  auto op = oweak.lock(); if (!op) return;
-  ag::Node* o = op.get();
+  // backward: parallelize over (B,C) channels to avoid races on Xn->grad
+  out->backward = [this, Xn = X.n, xs, yshape,
+                   oweak = std::weak_ptr<ag::Node>(out)]() {
+    auto op = oweak.lock(); if (!op) return;
+    ag::Node* o = op.get();
 
-  if (!Xn || !Xn->requires_grad) return;
-  const auto xstr = strides_for(xs);
-  const auto ystr = strides_for(yshape);
-  std::size_t B = xs[0], C = xs[1], H = xs[2], W = xs[3];
-  std::size_t H_out = yshape[2], W_out = yshape[3];
+    if (!Xn || !Xn->requires_grad) return;
+    if (Xn->grad.size() != Xn->value.size()) Xn->grad.assign(Xn->value.size(), 0.0f);
 
-  for (std::size_t b=0;b<B;++b)
-  for (std::size_t c=0;c<C;++c)
-  for (std::size_t oh=0;oh<H_out;++oh)
-  for (std::size_t ow=0;ow<W_out;++ow) {
-    float m = o->value[b*ystr[0] + c*ystr[1] + oh*ystr[2] + ow*ystr[3]];
-    std::size_t ties = 0;
-    for (std::size_t kh=0; kh<this->kH; ++kh)
-    for (std::size_t kw=0; kw<this->kW; ++kw) {
-      long long ih = (long long)oh*(long long)this->sH + (long long)kh - (long long)this->pH;
-      long long iw = (long long)ow*(long long)this->sW + (long long)kw - (long long)this->pW;
-      if (ih<0 || iw<0 || ih>=(long long)H || iw>=(long long)W) continue;
-      std::size_t xi = b*xstr[0] + c*xstr[1] + (std::size_t)ih*xstr[2] + (std::size_t)iw*xstr[3];
-      if (Xn->value[xi] == m) ++ties;
-    }
-    if (ties == 0) continue;
-    float g = o->grad[b*ystr[0] + c*ystr[1] + oh*ystr[2] + ow*ystr[3]] / float(ties);
-    for (std::size_t kh=0; kh<this->kH; ++kh)
-    for (std::size_t kw=0; kw<this->kW; ++kw) {
-      long long ih = (long long)oh*(long long)this->sH + (long long)kh - (long long)this->pH;
-      long long iw = (long long)ow*(long long)this->sW + (long long)kw - (long long)this->pW;
-      if (ih<0 || iw<0 || ih>=(long long)H || iw>=(long long)W) continue;
-      std::size_t xi = b*xstr[0] + c*xstr[1] + (std::size_t)ih*xstr[2] + (std::size_t)iw*xstr[3];
-      if (Xn->value[xi] == m) Xn->grad[xi] += g;
-    }
-  }
-};
+    const auto xstr = strides_for(xs);
+    const auto ystr = strides_for(yshape);
+    const std::size_t B = xs[0], C = xs[1], H = xs[2], W = xs[3];
+    const std::size_t H_out = yshape[2], W_out = yshape[3];
 
+    const std::size_t BC = B * C;
+    ag::parallel::parallel_for(BC, /*grain=*/1, [&](std::size_t bc0, std::size_t bc1){
+      for (std::size_t bc = bc0; bc < bc1; ++bc) {
+        const std::size_t b = bc / C;
+        const std::size_t c = bc % C;
+        const std::size_t base = b * xstr[0] + c * xstr[1];
+
+        for (std::size_t oh = 0; oh < H_out; ++oh) {
+          const std::size_t h0 = (oh * sH > pH) ? (oh * sH - pH) : 0;
+          const std::size_t h1 = std::min(h0 + kH, H);
+          for (std::size_t ow = 0; ow < W_out; ++ow) {
+            const std::size_t w0 = (ow * sW > pW) ? (ow * sW - pW) : 0;
+            const std::size_t w1 = std::min(w0 + kW, W);
+
+            // first pass: count ties
+            float m = -std::numeric_limits<float>::infinity();
+            for (std::size_t ih = h0; ih < h1; ++ih) {
+              const std::size_t row = base + ih * xstr[2];
+              for (std::size_t iw = w0; iw < w1; ++iw) {
+                const std::size_t xi = row + iw * xstr[3];
+                m = std::max(m, Xn->value[xi]);
+              }
+            }
+            std::size_t ties = 0;
+            for (std::size_t ih = h0; ih < h1; ++ih) {
+              const std::size_t row = base + ih * xstr[2];
+              for (std::size_t iw = w0; iw < w1; ++iw) {
+                const std::size_t xi = row + iw * xstr[3];
+                if (Xn->value[xi] == m) ++ties;
+              }
+            }
+            if (ties == 0) continue;
+
+            const std::size_t yi = b * ystr[0] + c * ystr[1] + oh * ystr[2] + ow * ystr[3];
+            const float g = o->grad[yi] / float(ties);
+
+            for (std::size_t ih = h0; ih < h1; ++ih) {
+              const std::size_t row = base + ih * xstr[2];
+              for (std::size_t iw = w0; iw < w1; ++iw) {
+                const std::size_t xi = row + iw * xstr[3];
+                if (Xn->value[xi] == m) Xn->grad[xi] += g;
+              }
+            }
+          }
+        }
+      }
+    });
+  };
 
 
   return make_from_node(out);
@@ -107,32 +147,46 @@ Variable AvgPool2d::forward(const Variable& X) {
   auto out = std::make_shared<Node>();
   out->shape = yshape;
   out->value.assign(numel(yshape), 0.0f);
-  out->grad.assign(numel(yshape), 0.0f);
+  if (X.n->requires_grad) out->grad.assign(numel(yshape), 0.0f);
   out->requires_grad = X.n->requires_grad;
   out->parents = {X.n};
 
   const auto xstr = strides_for(xs);
   const auto ystr = strides_for(yshape);
 
-  // forward: average
-  for (std::size_t b=0;b<B;++b)
-  for (std::size_t c=0;c<C;++c)
-  for (std::size_t oh=0;oh<H_out;++oh)
-  for (std::size_t ow=0;ow<W_out;++ow) {
-    float acc = 0.0f;
-    std::size_t count = 0;
-    for (std::size_t kh=0;kh<kH;++kh)
-    for (std::size_t kw=0;kw<kW;++kw) {
-      long long ih = (long long)oh*(long long)sH + (long long)kh - (long long)pH;
-      long long iw = (long long)ow*(long long)sW + (long long)kw - (long long)pW;
-      if (ih<0 || iw<0 || ih>=(long long)H || iw>=(long long)W) continue;
-      std::size_t xi = b*xstr[0] + c*xstr[1] + (std::size_t)ih*xstr[2] + (std::size_t)iw*xstr[3];
-      acc += X.n->value[xi];
-      ++count;
+  // forward: average (parallel over outputs)
+  const std::size_t outN = numel(yshape);
+  const std::size_t OUT_GRAIN = 1024;
+  ag::parallel::parallel_for(outN, OUT_GRAIN, [&](std::size_t i0, std::size_t i1){
+    const std::size_t strideB = C * H_out * W_out;
+    const std::size_t strideC = H_out * W_out;
+    const std::size_t strideH = W_out;
+    for (std::size_t lin = i0; lin < i1; ++lin) {
+      std::size_t tmp = lin;
+      const std::size_t b = tmp / strideB; tmp %= strideB;
+      const std::size_t c = tmp / strideC; tmp %= strideC;
+      const std::size_t oh = tmp / strideH;
+      const std::size_t ow = tmp % strideH;
+
+      const std::size_t base = b * xstr[0] + c * xstr[1];
+      const std::size_t h0 = (oh * sH > pH) ? (oh * sH - pH) : 0;
+      const std::size_t h1 = std::min(h0 + kH, H);
+      const std::size_t w0 = (ow * sW > pW) ? (ow * sW - pW) : 0;
+      const std::size_t w1 = std::min(w0 + kW, W);
+
+      float acc = 0.0f;
+      std::size_t count = 0;
+      for (std::size_t ih = h0; ih < h1; ++ih) {
+        const std::size_t row = base + ih * xstr[2];
+        for (std::size_t iw = w0; iw < w1; ++iw) {
+          const std::size_t xi = row + iw * xstr[3];
+          acc += X.n->value[xi];
+          ++count;
+        }
+      }
+      out->value[lin] = (count == 0) ? 0.0f : acc / float(count);
     }
-    std::size_t yi = b*ystr[0] + c*ystr[1] + oh*ystr[2] + ow*ystr[3];
-    out->value[yi] = (count == 0) ? 0.0f : acc / float(count);
-  }
+  });
 
   out->backward = [this, Xn = X.n, xs, yshape,
                    oweak = std::weak_ptr<ag::Node>(out)]() {
@@ -140,38 +194,44 @@ Variable AvgPool2d::forward(const Variable& X) {
     ag::Node* o = op.get();
 
     if (!Xn || !Xn->requires_grad) return;
+    if (Xn->grad.size() != Xn->value.size()) Xn->grad.assign(Xn->value.size(), 0.0f);
+
     const auto xstr = strides_for(xs);
     const auto ystr = strides_for(yshape);
-    std::size_t B = xs[0], C = xs[1], H = xs[2], W = xs[3];
-    std::size_t H_out = yshape[2], W_out = yshape[3];
+    const std::size_t B = xs[0], C = xs[1], H = xs[2], W = xs[3];
+    const std::size_t H_out = yshape[2], W_out = yshape[3];
 
-    for (std::size_t b=0;b<B;++b)
-    for (std::size_t c=0;c<C;++c)
-    for (std::size_t oh=0;oh<H_out;++oh)
-    for (std::size_t ow=0;ow<W_out;++ow) {
-      std::size_t count = 0;
-      for (std::size_t kh=0; kh<this->kH; ++kh)
-      for (std::size_t kw=0; kw<this->kW; ++kw) {   // <-- fixed
-        long long ih = (long long)oh*(long long)this->sH + (long long)kh - (long long)this->pH;
-        long long iw = (long long)ow*(long long)this->sW + (long long)kw - (long long)this->pW;
-        if (ih<0 || iw<0 || ih>=(long long)H || iw>=(long long)W) continue;
-        ++count;
+    const std::size_t BC = B * C;
+    ag::parallel::parallel_for(BC, /*grain=*/1, [&](std::size_t bc0, std::size_t bc1){
+      for (std::size_t bc = bc0; bc < bc1; ++bc) {
+        const std::size_t b = bc / C;
+        const std::size_t c = bc % C;
+        const std::size_t base = b * xstr[0] + c * xstr[1];
+
+        for (std::size_t oh = 0; oh < H_out; ++oh) {
+          const std::size_t h0 = (oh * sH > pH) ? (oh * sH - pH) : 0;
+          const std::size_t h1 = std::min(h0 + kH, H);
+          for (std::size_t ow = 0; ow < W_out; ++ow) {
+            const std::size_t w0 = (ow * sW > pW) ? (ow * sW - pW) : 0;
+            const std::size_t w1 = std::min(w0 + kW, W);
+            const std::size_t cnt = (h1 - h0) * (w1 - w0);
+            if (cnt == 0) continue;
+            const std::size_t yi = b * ystr[0] + c * ystr[1] + oh * ystr[2] + ow * ystr[3];
+            const float g = o->grad[yi] / float(cnt);
+            for (std::size_t ih = h0; ih < h1; ++ih) {
+              const std::size_t row = base + ih * xstr[2];
+              for (std::size_t iw = w0; iw < w1; ++iw) {
+                const std::size_t xi = row + iw * xstr[3];
+                Xn->grad[xi] += g;
+              }
+            }
+          }
+        }
       }
-      if (count==0) continue;
-      float g = o->grad[b*ystr[0] + c*ystr[1] + oh*ystr[2] + ow*ystr[3]] / float(count);
-      for (std::size_t kh=0; kh<this->kH; ++kh)
-      for (std::size_t kw=0; kw<this->kW; ++kw) {   // <-- fixed
-        long long ih = (long long)oh*(long long)this->sH + (long long)kh - (long long)this->pH;
-        long long iw = (long long)ow*(long long)this->sW + (long long)kw - (long long)this->pW;
-        if (ih<0 || iw<0 || ih>=(long long)H || iw>=(long long)W) continue;
-        std::size_t xi = b*xstr[0] + c*xstr[1] + (std::size_t)ih*xstr[2] + (std::size_t)iw*xstr[3];
-        Xn->grad[xi] += g;
-      }
-    }
+    });
   };
 
   return make_from_node(out);
 }
-
 
 } // namespace ag::nn

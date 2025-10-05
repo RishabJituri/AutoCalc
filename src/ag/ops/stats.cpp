@@ -8,12 +8,14 @@
 #include <algorithm>
 #include <limits>   
 #include <memory>  
+#include "ag/parallel/parallel_for.hpp"
 
 namespace ag {
 using detail::numel;
 using detail::strides_for;
 using detail::unravel_index;
 using detail::ravel_index;
+using ag::parallel::parallel_for;
 
 static std::vector<std::size_t> normalize_axes(const std::vector<int>& axes_in,
                                                std::size_t rank) {
@@ -66,72 +68,149 @@ Variable reduce_max(const Variable& X, const std::vector<int>& axes_in, bool kee
   const auto xstr = strides_for(shp);
   const auto ostr = strides_for(out_shape);
 
-  auto map_out_index = [&](const std::vector<std::size_t>& idx)->std::size_t{
-    if (axes.empty()) return 0;
-    if (keepdims) {
-      std::vector<std::size_t> oidx = idx;
-      for (auto a: axes) oidx[a] = 0;
-      return ravel_index(oidx, ostr);
-    } else {
-      std::vector<std::size_t> oidx;
-      oidx.reserve(idx.size());
-      for (std::size_t i=0;i<idx.size();++i) {
-        if (std::find(axes.begin(), axes.end(), i) == axes.end()) oidx.push_back(idx[i]);
-      }
-      if (oidx.empty()) return 0;
-      return ravel_index(oidx, ostr);
-    }
-  };
-
-  // forward
-  for (std::size_t lin=0; lin<numel(shp); ++lin) {
-    auto idx = unravel_index(lin, shp);
-    std::size_t oi = map_out_index(idx);
-    float v = X.n->value[lin];
-    if (v > out->value[oi]) out->value[oi] = v;
+  // Per-output-group parallel max (scan only the reduced axes per output)
+  const std::size_t outN = numel(out_shape);
+  // Prepare reduced-dim info
+  const std::size_t R = axes.size();
+  std::vector<std::size_t> red_dims = axes; // reduced dims
+  std::vector<std::size_t> red_extents(R), red_strides(R);
+  std::size_t reduced_count = 1;
+  for (std::size_t r = 0; r < R; ++r) {
+    red_extents[r] = shp[red_dims[r]];
+    red_strides[r] = xstr[red_dims[r]];
+    reduced_count *= red_extents[r];
   }
 
-  // backward
-  out->backward = [Xn = X.n, shp, out_shape, axes, ostr,
-                 oweak = std::weak_ptr<ag::Node>(out)]() {
-  auto op = oweak.lock(); if (!op) return;
-  ag::Node* o = op.get();
-  if (!Xn || !Xn->requires_grad) return;
-
-  auto map_out_index = [&](const std::vector<std::size_t>& idx)->std::size_t{
-    if (axes.empty()) return 0;
-    if (o->shape.size() == shp.size()) {
-      std::vector<std::size_t> oidx = idx;
-      for (auto a: axes) oidx[a] = 0;
-      return ravel_index(oidx, ostr);
-    } else {
-      std::vector<std::size_t> oidx;
-      oidx.reserve(idx.size());
-      for (std::size_t i=0;i<idx.size();++i)
-        if (std::find(axes.begin(), axes.end(), i) == axes.end()) oidx.push_back(idx[i]);
-      return oidx.empty() ? 0 : ravel_index(oidx, ostr);
-    }
-  };
-
-  // For each input element, find its output group and split grad among ties.
-  for (std::size_t lin = 0; lin < numel(shp); ++lin) {
-    auto idx = unravel_index(lin, shp);
-    std::size_t oi = map_out_index(idx);
-    float m = o->value[oi];
-
-    // count ties in this group
-    std::size_t ties = 0;
-    for (std::size_t lin2 = 0; lin2 < numel(shp); ++lin2) {
-      if (map_out_index(unravel_index(lin2, shp)) == oi &&
-          Xn->value[lin2] == m) {
-        ++ties;
+  const std::size_t GROUP_GRAIN = 64; // tuneable
+  parallel_for(outN, GROUP_GRAIN, [&](std::size_t o0, std::size_t o1){
+    std::vector<std::size_t> out_idx; out_idx.reserve(out_shape.size());
+    std::vector<std::size_t> full_idx(shp.size());
+    std::vector<std::size_t> red_coord(R);
+    for (std::size_t oi = o0; oi < o1; ++oi) {
+      // build full_idx (length rank) by mapping output coords into kept dims
+      if (R == 0) {
+        // full index runs over all dims
+        for (std::size_t i = 0; i < shp.size(); ++i) full_idx[i] = 0;
+      } else if (keepdims) {
+        out_idx = unravel_index(oi, out_shape);
+        // out_idx already length rank (keeps reduced dims as 0)
+        for (std::size_t i = 0; i < shp.size(); ++i) full_idx[i] = out_idx[i];
+      } else {
+        out_idx = unravel_index(oi, out_shape);
+        std::size_t p = 0;
+        for (std::size_t i = 0; i < shp.size(); ++i) {
+          if (std::find(red_dims.begin(), red_dims.end(), i) != red_dims.end()) {
+            full_idx[i] = 0;
+          } else {
+            full_idx[i] = out_idx[p++];
+          }
+        }
       }
+
+      // base linear index into X for this group's first combination (all reduced coords = 0)
+      std::size_t base = ravel_index(full_idx, xstr);
+
+      // iterate over reduced axes via multi-index to find max
+      float best = -std::numeric_limits<float>::infinity();
+      // reset red_coord
+      for (std::size_t r = 0; r < R; ++r) { red_coord[r] = 0; }
+      std::size_t offset = base;
+      for (std::size_t rc = 0; rc < std::max<std::size_t>(std::size_t(1), reduced_count); ++rc) {
+        float v = X.n->value[offset];
+        if (v > best) best = v;
+
+        // increment red_coord and offset
+        for (int d = int(R) - 1; d >= 0; --d) {
+          red_coord[d]++;
+          offset += red_strides[d];
+          if (red_coord[d] < red_extents[d]) break;
+          // wrap
+          offset -= red_strides[d] * red_extents[d];
+          red_coord[d] = 0;
+        }
+      }
+      out->value[oi] = best;
     }
-    if (ties > 0 && Xn->value[lin] == m) {
-      Xn->grad[lin] += o->grad[oi] / float(ties);
+  });
+
+  // backward: for each output group, count ties then distribute o->grad[oi]/ties to matching inputs
+  out->backward = [Xn = X.n, shp, out_shape, axes, ostr, oweak = std::weak_ptr<ag::Node>(out), xstr, keepdims]() {
+    auto op = oweak.lock(); if (!op) return; ag::Node* o = op.get();
+    if (!Xn || !Xn->requires_grad) return;
+
+    if (Xn->grad.size() != Xn->value.size()) Xn->grad.assign(Xn->value.size(), 0.0f);
+
+    const std::size_t outN2 = numel(out_shape);
+    const std::size_t R2 = axes.size();
+    std::vector<std::size_t> red_dims2 = axes;
+    std::vector<std::size_t> red_extents2(R2), red_strides2(R2);
+    std::size_t reduced_count2 = 1;
+    for (std::size_t r = 0; r < R2; ++r) {
+      red_extents2[r] = shp[red_dims2[r]];
+      red_strides2[r] = xstr[red_dims2[r]];
+      reduced_count2 *= red_extents2[r];
     }
-  }
-};
+
+    const std::size_t GROUP_GRAIN2 = 64;
+    parallel_for(outN2, GROUP_GRAIN2, [&](std::size_t o0, std::size_t o1){
+      std::vector<std::size_t> out_idx; out_idx.reserve(out_shape.size());
+      std::vector<std::size_t> full_idx(shp.size());
+      std::vector<std::size_t> red_coord(R2);
+      for (std::size_t oi = o0; oi < o1; ++oi) {
+        // build full_idx as in forward
+        if (R2 == 0) {
+          for (std::size_t i = 0; i < shp.size(); ++i) full_idx[i] = 0;
+        } else if (keepdims) {
+          out_idx = unravel_index(oi, out_shape);
+          for (std::size_t i = 0; i < shp.size(); ++i) full_idx[i] = out_idx[i];
+        } else {
+          out_idx = unravel_index(oi, out_shape);
+          std::size_t p = 0;
+          for (std::size_t i = 0; i < shp.size(); ++i) {
+            if (std::find(red_dims2.begin(), red_dims2.end(), i) != red_dims2.end()) {
+              full_idx[i] = 0;
+            } else {
+              full_idx[i] = out_idx[p++];
+            }
+          }
+        }
+
+        std::size_t base = ravel_index(full_idx, xstr);
+        // first pass: count ties
+        std::size_t ties = 0;
+        for (std::size_t r = 0; r < R2; ++r) red_coord[r] = 0;
+        std::size_t offset = base;
+        const float m = o->value[oi];
+        for (std::size_t rc = 0; rc < std::max<std::size_t>(std::size_t(1), reduced_count2); ++rc) {
+          if (Xn->value[offset] == m) ++ties;
+          for (int d = int(R2) - 1; d >= 0; --d) {
+            red_coord[d]++;
+            offset += red_strides2[d];
+            if (red_coord[d] < red_extents2[d]) break;
+            offset -= red_strides2[d] * red_extents2[d];
+            red_coord[d] = 0;
+          }
+        }
+        if (ties == 0) continue;
+        // second pass: distribute gradient
+        const float share = static_cast<float>(o->grad[oi]) / float(ties);
+        for (std::size_t r = 0; r < R2; ++r) red_coord[r] = 0;
+        offset = base;
+        for (std::size_t rc = 0; rc < std::max<std::size_t>(std::size_t(1), reduced_count2); ++rc) {
+          if (Xn->value[offset] == m) {
+            Xn->grad[offset] += share;
+          }
+          for (int d = int(R2) - 1; d >= 0; --d) {
+            red_coord[d]++;
+            offset += red_strides2[d];
+            if (red_coord[d] < red_extents2[d]) break;
+            offset -= red_strides2[d] * red_extents2[d];
+            red_coord[d] = 0;
+          }
+        }
+      }
+    });
+  };
 
 
   return make_from_node(out);

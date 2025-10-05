@@ -1,12 +1,17 @@
 #include "ag/ops/elementwise.hpp"
 #include "ag/ops/tensor_utils.hpp"
 #include <cmath>
+#include "ag/parallel/parallel_for.hpp"
 
 namespace ag {
 using detail::broadcast_two;
 using detail::numel;
 using detail::strides_for;
 using detail::unravel_index;
+
+// Parallelization params for elementwise ops
+static constexpr std::size_t ELEM_SERIAL_CUTOFF = 4096;
+static constexpr std::size_t ELEM_GRAIN = 1024;
 
 // Map an output index to the flat index in input A (with broadcasting)
 static std::size_t map_aligned(const std::vector<std::size_t>& out_idx,
@@ -41,11 +46,25 @@ Variable add(const Variable& A, const Variable& B) {
   const auto As = strides_for(A.n->shape), Bs = strides_for(B.n->shape);
 
   // forward
-  for (std::size_t lin = 0; lin < oN; ++lin) {
-    auto idx = detail::unravel_index(lin, out_shape);
-    const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
-    const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
-    out->value[lin] = static_cast<float>(A.n->value[ai]) + static_cast<float>(B.n->value[bi]);
+  if (oN < ELEM_SERIAL_CUTOFF) {
+    for (std::size_t lin = 0; lin < oN; ++lin) {
+      auto idx = detail::unravel_index(lin, out_shape);
+      const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
+      const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
+      out->value[lin] = static_cast<float>(A.n->value[ai]) + static_cast<float>(B.n->value[bi]);
+    }
+  } else {
+    const auto outp = out->value.data();
+    const auto aval = A.n->value.data();
+    const auto bval = B.n->value.data();
+    ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+      for (std::size_t lin = l0; lin < l1; ++lin) {
+        auto idx = detail::unravel_index(lin, out_shape);
+        const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
+        const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
+        outp[lin] = static_cast<float>(aval[ai]) + static_cast<float>(bval[bi]);
+      }
+    });
   }
 
   std::weak_ptr<Node> ow = out, aw = A.n, bw = B.n;
@@ -53,15 +72,57 @@ Variable add(const Variable& A, const Variable& B) {
     auto o = ow.lock(); if (!o) return;
     auto a = aw.lock(); auto b = bw.lock();
     const std::size_t oN = o->value.size();
-    for (std::size_t lin = 0; lin < oN; ++lin) {
-      auto idx = detail::unravel_index(lin, out_shape);
-      if (a && a->requires_grad) {
-        const std::size_t ai = map_aligned(idx, out_shape, a->shape, As);
-        a->grad[ai] += static_cast<float>(o->grad[lin]);            // dy/da = 1
+
+    ag::parallel::ScopedDeterministicParallel scope_guard;
+
+    const bool A_nobroadcast = a && (a->shape == out_shape);
+    const bool B_nobroadcast = b && (b->shape == out_shape);
+
+    // If both inputs have the same shape as output we can parallelize a single pass safely.
+    if (oN >= ELEM_SERIAL_CUTOFF && A_nobroadcast && B_nobroadcast) {
+      const auto g_in = o->grad.data();
+      auto a_out = a->grad.data();
+      auto b_out = b->grad.data();
+      ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+        for (std::size_t lin = l0; lin < l1; ++lin) {
+          const float g = static_cast<float>(g_in[lin]);
+          a_out[lin] += g;
+          b_out[lin] += g;
+        }
+      });
+      return;
+    }
+
+    // Otherwise, fall back to safe per-input accumulation (parallelize per-input only if no-broadcast)
+    if (a && a->requires_grad) {
+      if (oN >= ELEM_SERIAL_CUTOFF && A_nobroadcast) {
+        const auto g_in = o->grad.data();
+        auto a_out = a->grad.data();
+        ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+          for (std::size_t lin = l0; lin < l1; ++lin) a_out[lin] += static_cast<float>(g_in[lin]);
+        });
+      } else {
+        for (std::size_t lin = 0; lin < oN; ++lin) {
+          const auto idx = detail::unravel_index(lin, out_shape);
+          const std::size_t ai = map_aligned(idx, out_shape, a->shape, As);
+          a->grad[ai] += static_cast<float>(o->grad[lin]);
+        }
       }
-      if (b && b->requires_grad) {
-        const std::size_t bi = map_aligned(idx, out_shape, b->shape, Bs);
-        b->grad[bi] += static_cast<float>(o->grad[lin]);            // dy/dc = 1
+    }
+
+    if (b && b->requires_grad) {
+      if (oN >= ELEM_SERIAL_CUTOFF && B_nobroadcast) {
+        const auto g_in = o->grad.data();
+        auto b_out = b->grad.data();
+        ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+          for (std::size_t lin = l0; lin < l1; ++lin) b_out[lin] += static_cast<float>(g_in[lin]);
+        });
+      } else {
+        for (std::size_t lin = 0; lin < oN; ++lin) {
+          const auto idx = detail::unravel_index(lin, out_shape);
+          const std::size_t bi = map_aligned(idx, out_shape, b->shape, Bs);
+          b->grad[bi] += static_cast<float>(o->grad[lin]);
+        }
       }
     }
   };
@@ -80,25 +141,76 @@ Variable sub(const Variable& A, const Variable& B) {
 
   const auto As = strides_for(A.n->shape), Bs = strides_for(B.n->shape);
 
-  for (std::size_t lin = 0; lin < oN; ++lin) {
-    const auto idx = detail::unravel_index(lin, out_shape);
-    const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
-    const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
-    out->value[lin] = static_cast<float>(A.n->value[ai]) - static_cast<float>(B.n->value[bi]);
+  if (oN < ELEM_SERIAL_CUTOFF) {
+    for (std::size_t lin = 0; lin < oN; ++lin) {
+      const auto idx = detail::unravel_index(lin, out_shape);
+      const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
+      const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
+      out->value[lin] = static_cast<float>(A.n->value[ai]) - static_cast<float>(B.n->value[bi]);
+    }
+  } else {
+    const auto outp = out->value.data();
+    const auto aval = A.n->value.data();
+    const auto bval = B.n->value.data();
+    ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+      for (std::size_t lin = l0; lin < l1; ++lin) {
+        const auto idx = detail::unravel_index(lin, out_shape);
+        const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
+        const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
+        outp[lin] = static_cast<float>(aval[ai]) - static_cast<float>(bval[bi]);
+      }
+    });
   }
 
   std::weak_ptr<Node> ow = out, aw = A.n, bw = B.n;
   out->backward = [ow, aw, bw, out_shape, As, Bs]() {
     auto o = ow.lock(); if (!o) return; auto a = aw.lock(); auto b = bw.lock();
-    for (std::size_t lin = 0; lin < o->value.size(); ++lin) {
-      auto idx = detail::unravel_index(lin, out_shape);
-      if (a && a->requires_grad) {
-        const std::size_t ai = map_aligned(idx, out_shape, a->shape, As);
-        a->grad[ai] += static_cast<float>(o->grad[lin]);
+    const std::size_t oN = o->value.size();
+    ag::parallel::ScopedDeterministicParallel scope_guard;
+    const bool A_nobroadcast = a && (a->shape == out_shape);
+    const bool B_nobroadcast = b && (b->shape == out_shape);
+
+    if (oN >= ELEM_SERIAL_CUTOFF && A_nobroadcast && B_nobroadcast) {
+      const auto g_in = o->grad.data();
+      auto a_out = a->grad.data();
+      auto b_out = b->grad.data();
+      ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+        for (std::size_t lin = l0; lin < l1; ++lin) {
+          const float g = static_cast<float>(g_in[lin]);
+          a_out[lin] += g;
+          b_out[lin] -= g;
+        }
+      });
+      return;
+    }
+
+    if (a && a->requires_grad) {
+      if (oN >= ELEM_SERIAL_CUTOFF && A_nobroadcast) {
+        const auto g_in = o->grad.data(); auto a_out = a->grad.data();
+        ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+          for (std::size_t lin = l0; lin < l1; ++lin) a_out[lin] += static_cast<float>(g_in[lin]);
+        });
+      } else {
+        for (std::size_t lin = 0; lin < oN; ++lin) {
+          const auto idx = detail::unravel_index(lin, out_shape);
+          const std::size_t ai = map_aligned(idx, out_shape, a->shape, As);
+          a->grad[ai] += static_cast<float>(o->grad[lin]);
+        }
       }
-      if (b && b->requires_grad) {
-        const std::size_t bi = map_aligned(idx, out_shape, b->shape, Bs);
-        b->grad[bi] -= static_cast<float>(o->grad[lin]);            // minus sign
+    }
+
+    if (b && b->requires_grad) {
+      if (oN >= ELEM_SERIAL_CUTOFF && B_nobroadcast) {
+        const auto g_in = o->grad.data(); auto b_out = b->grad.data();
+        ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+          for (std::size_t lin = l0; lin < l1; ++lin) b_out[lin] += -static_cast<float>(g_in[lin]);
+        });
+      } else {
+        for (std::size_t lin = 0; lin < oN; ++lin) {
+          const auto idx = detail::unravel_index(lin, out_shape);
+          const std::size_t bi = map_aligned(idx, out_shape, b->shape, Bs);
+          b->grad[bi] -= static_cast<float>(o->grad[lin]);
+        }
       }
     }
   };
@@ -117,22 +229,83 @@ Variable mul(const Variable& A, const Variable& B) {
 
   const auto As = strides_for(A.n->shape), Bs = strides_for(B.n->shape);
 
-  for (std::size_t lin = 0; lin < oN; ++lin) {
-    const auto idx = detail::unravel_index(lin, out_shape);
-    const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
-    const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
-    out->value[lin] = static_cast<float>(A.n->value[ai]) * static_cast<float>(B.n->value[bi]);
+  if (oN < ELEM_SERIAL_CUTOFF) {
+    for (std::size_t lin = 0; lin < oN; ++lin) {
+      const auto idx = detail::unravel_index(lin, out_shape);
+      const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
+      const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
+      out->value[lin] = static_cast<float>(A.n->value[ai]) * static_cast<float>(B.n->value[bi]);
+    }
+  } else {
+    const auto outp = out->value.data();
+    const auto aval = A.n->value.data();
+    const auto bval = B.n->value.data();
+    ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+      for (std::size_t lin = l0; lin < l1; ++lin) {
+        const auto idx = detail::unravel_index(lin, out_shape);
+        const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
+        const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
+        outp[lin] = static_cast<float>(aval[ai]) * static_cast<float>(bval[bi]);
+      }
+    });
   }
 
   std::weak_ptr<Node> ow = out, aw = A.n, bw = B.n;
   out->backward = [ow, aw, bw, out_shape, As, Bs]() {
     auto o = ow.lock(); if (!o) return; auto a = aw.lock(); auto b = bw.lock();
-    for (std::size_t lin = 0; lin < o->value.size(); ++lin) {
-      const auto idx = detail::unravel_index(lin, out_shape);
-      const std::size_t ai = a ? map_aligned(idx, out_shape, a->shape, As) : 0;
-      const std::size_t bi = b ? map_aligned(idx, out_shape, b->shape, Bs) : 0;
-      if (a && a->requires_grad) a->grad[ai] += static_cast<float>(o->grad[lin]) * (b ? static_cast<float>(b->value[bi]) : 0.0f);
-      if (b && b->requires_grad) b->grad[bi] += static_cast<float>(o->grad[lin]) * (a ? static_cast<float>(a->value[ai]) : 0.0f);
+    const std::size_t oN = o->value.size();
+    ag::parallel::ScopedDeterministicParallel scope_guard;
+    const bool A_nobroadcast = a && (a->shape == out_shape);
+    const bool B_nobroadcast = b && (b->shape == out_shape);
+
+    if (oN >= ELEM_SERIAL_CUTOFF && A_nobroadcast && B_nobroadcast) {
+      const auto g_in = o->grad.data();
+      const auto aval = a->value.data();
+      const auto bval = b->value.data();
+      auto a_out = a->grad.data();
+      auto b_out = b->grad.data();
+      ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+        for (std::size_t lin = l0; lin < l1; ++lin) {
+          const float g = static_cast<float>(g_in[lin]);
+          const float bv = static_cast<float>(bval[lin]);
+          const float av = static_cast<float>(aval[lin]);
+          a_out[lin] += g * bv;
+          b_out[lin] += g * av;
+        }
+      });
+      return;
+    }
+
+    if (a && a->requires_grad) {
+      if (oN >= ELEM_SERIAL_CUTOFF && A_nobroadcast) {
+        const auto g_in = o->grad.data(); const auto bval = b->value.data(); auto a_out = a->grad.data();
+        ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+          for (std::size_t lin = l0; lin < l1; ++lin) a_out[lin] += static_cast<float>(g_in[lin]) * static_cast<float>(bval[lin]);
+        });
+      } else {
+        for (std::size_t lin = 0; lin < oN; ++lin) {
+          const auto idx = detail::unravel_index(lin, out_shape);
+          const std::size_t ai = map_aligned(idx, out_shape, a->shape, As);
+          const std::size_t bi = map_aligned(idx, out_shape, b->shape, Bs);
+          a->grad[ai] += static_cast<float>(o->grad[lin]) * (b ? static_cast<float>(b->value[bi]) : 0.0f);
+        }
+      }
+    }
+
+    if (b && b->requires_grad) {
+      if (oN >= ELEM_SERIAL_CUTOFF && B_nobroadcast) {
+        const auto g_in = o->grad.data(); const auto aval = a->value.data(); auto b_out = b->grad.data();
+        ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+          for (std::size_t lin = l0; lin < l1; ++lin) b_out[lin] += static_cast<float>(g_in[lin]) * static_cast<float>(aval[lin]);
+        });
+      } else {
+        for (std::size_t lin = 0; lin < oN; ++lin) {
+          const auto idx = detail::unravel_index(lin, out_shape);
+          const std::size_t ai = map_aligned(idx, out_shape, a->shape, As);
+          const std::size_t bi = map_aligned(idx, out_shape, b->shape, Bs);
+          b->grad[bi] += static_cast<float>(o->grad[lin]) * (a ? static_cast<float>(a->value[ai]) : 0.0f);
+        }
+      }
     }
   };
 
@@ -150,23 +323,82 @@ Variable div(const Variable& A, const Variable& B) {
 
   const auto As = strides_for(A.n->shape), Bs = strides_for(B.n->shape);
 
-  for (std::size_t lin = 0; lin < oN; ++lin) {
-    const auto idx = detail::unravel_index(lin, out_shape);
-    const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
-    const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
-    out->value[lin] = static_cast<float>(A.n->value[ai]) / static_cast<float>(B.n->value[bi]);
+  if (oN < ELEM_SERIAL_CUTOFF) {
+    for (std::size_t lin = 0; lin < oN; ++lin) {
+      const auto idx = detail::unravel_index(lin, out_shape);
+      const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
+      const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
+      out->value[lin] = static_cast<float>(A.n->value[ai]) / static_cast<float>(B.n->value[bi]);
+    }
+  } else {
+    const auto outp = out->value.data();
+    const auto aval = A.n->value.data();
+    const auto bval = B.n->value.data();
+    ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+      for (std::size_t lin = l0; lin < l1; ++lin) {
+        const auto idx = detail::unravel_index(lin, out_shape);
+        const std::size_t ai = map_aligned(idx, out_shape, A.n->shape, As);
+        const std::size_t bi = map_aligned(idx, out_shape, B.n->shape, Bs);
+        outp[lin] = static_cast<float>(aval[ai]) / static_cast<float>(bval[bi]);
+      }
+    });
   }
 
   std::weak_ptr<Node> ow = out, aw = A.n, bw = B.n;
   out->backward = [ow, aw, bw, out_shape, As, Bs]() {
     auto o = ow.lock(); if (!o) return; auto a = aw.lock(); auto b = bw.lock();
-    for (std::size_t lin = 0; lin < o->value.size(); ++lin) {
-      const auto idx = detail::unravel_index(lin, out_shape);
-      const std::size_t ai = a ? map_aligned(idx, out_shape, a->shape, As) : 0;
-      const std::size_t bi = b ? map_aligned(idx, out_shape, b->shape, Bs) : 0;
-      const float denom = (b ? static_cast<float>(b->value[bi]) : 1.0f);
-      if (a && a->requires_grad) a->grad[ai] += static_cast<float>(o->grad[lin]) / denom;
-      if (b && b->requires_grad) b->grad[bi] += - static_cast<float>(o->grad[lin]) * (a ? static_cast<float>(a->value[ai]) : 0.0f) / (denom*denom);
+    const std::size_t oN = o->value.size();
+    ag::parallel::ScopedDeterministicParallel scope_guard;
+    const bool A_nobroadcast = a && (a->shape == out_shape);
+    const bool B_nobroadcast = b && (b->shape == out_shape);
+
+    if (oN >= ELEM_SERIAL_CUTOFF && A_nobroadcast && B_nobroadcast) {
+      const auto g_in = o->grad.data(); const auto aval = a->value.data(); const auto bval = b->value.data();
+      auto a_out = a->grad.data(); auto b_out = b->grad.data();
+      ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+        for (std::size_t lin = l0; lin < l1; ++lin) {
+          const float g = static_cast<float>(g_in[lin]);
+          const float bv = static_cast<float>(bval[lin]);
+          const float av = static_cast<float>(aval[lin]);
+          a_out[lin] += g / bv;
+          b_out[lin] += -g * av / (bv * bv);
+        }
+      });
+      return;
+    }
+
+    if (a && a->requires_grad) {
+      if (oN >= ELEM_SERIAL_CUTOFF && A_nobroadcast) {
+        const auto g_in = o->grad.data(); const auto bval = b->value.data(); auto a_out = a->grad.data();
+        ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+          for (std::size_t lin = l0; lin < l1; ++lin) a_out[lin] += static_cast<float>(g_in[lin]) / static_cast<float>(bval[lin]);
+        });
+      } else {
+        for (std::size_t lin = 0; lin < oN; ++lin) {
+          const auto idx = detail::unravel_index(lin, out_shape);
+          const std::size_t ai = map_aligned(idx, out_shape, a->shape, As);
+          const std::size_t bi = map_aligned(idx, out_shape, b->shape, Bs);
+          const float denom = (b ? static_cast<float>(b->value[bi]) : 1.0f);
+          a->grad[ai] += static_cast<float>(o->grad[lin]) / denom;
+        }
+      }
+    }
+
+    if (b && b->requires_grad) {
+      if (oN >= ELEM_SERIAL_CUTOFF && B_nobroadcast) {
+        const auto g_in = o->grad.data(); const auto aval = a->value.data(); auto b_out = b->grad.data();
+        ag::parallel::parallel_for(oN, ELEM_GRAIN, [&](std::size_t l0, std::size_t l1){
+          for (std::size_t lin = l0; lin < l1; ++lin) b_out[lin] += - static_cast<float>(g_in[lin]) * static_cast<float>(aval[lin]) / (static_cast<float>(b->value[lin]) * static_cast<float>(b->value[lin]));
+        });
+      } else {
+        for (std::size_t lin = 0; lin < oN; ++lin) {
+          const auto idx = detail::unravel_index(lin, out_shape);
+          const std::size_t ai = map_aligned(idx, out_shape, a->shape, As);
+          const std::size_t bi = map_aligned(idx, out_shape, b->shape, Bs);
+          const float denom = (b ? static_cast<float>(b->value[bi]) : 1.0f);
+          b->grad[bi] += - static_cast<float>(o->grad[lin]) * (a ? static_cast<float>(a->value[ai]) : 0.0f) / (denom*denom);
+        }
+      }
     }
   };
 
