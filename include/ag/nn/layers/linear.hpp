@@ -34,10 +34,8 @@ public:
   bool has_bias() const { return bias_; }
 
 protected:
-  std::vector<Variable*> _parameters() override {
-    if (bias_) return { &W_, &b_ };
-    return { &W_ };
-  }
+  // return pointers to local parameters (weight, bias)
+  std::vector<ag::Variable*> _parameters() override;
 
   void on_mode_change() override {}
 

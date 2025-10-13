@@ -23,7 +23,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
 #include "ag/core/variables.hpp"
 #include "ag/nn/module.hpp"
 #include "ag/nn/layers/lstm.hpp"
@@ -85,14 +84,14 @@ struct TinyShakespeareDataset : ag::data::Dataset {
         // Non-overlapping windows of length T
         const std::size_t last = end_inclusive - T - 1; // we access i..i+T and i+1..i+T
         for (std::size_t i = start; i <= last; i += T) {
-            std::vector<double> x; x.resize(T * V, 0.0);
-            std::vector<double> y; y.resize(T, 0.0);
+            std::vector<float> x; x.resize(T * V, 0.0f);
+            std::vector<float> y; y.resize(T, 0.0f);
             for (std::size_t t = 0; t < T; ++t) {
                 int in_id = ids[i + t];
                 int out_id = ids[i + t + 1];
                 // one-hot at [t, in_id]
-                x[t * V + in_id] = 1.0;
-                y[t] = static_cast<double>(out_id);
+                x[t * V + in_id] = 1.0f;
+                y[t] = static_cast<float>(out_id);
             }
             xs.emplace_back(std::move(x));
             ys.emplace_back(std::move(y));
@@ -105,7 +104,7 @@ struct TinyShakespeareDataset : ag::data::Dataset {
         const auto& x = xs[idx];
         const auto& y = ys[idx];
         ag::Variable vx(x, {T, V}, /*requires_grad=*/false);
-        ag::Variable vy(y, {T}, /*requires_grad=*/false); // double-encoded ids; we'll cast to size_t later
+        ag::Variable vy(y, {T}, /*requires_grad=*/false); // float-encoded ids; we'll cast to size_t later
         return {vx, vy};
     }
 };
@@ -144,7 +143,7 @@ static std::vector<int> encode_ids(const std::string& text, const Vocab& v) {
     return ids;
 }
 
-// ---------- convert batched target Variable [B,T] (double IDs) -> vector<size_t> length B*T ----------
+// ---------- convert batched target Variable [B,T] (float IDs) -> vector<size_t> length B*T ----------
 static std::vector<std::size_t> to_index_vec_flatten_BT(const ag::Variable& yBT) {
     const auto& shp = yBT.shape();
     if (shp.size() != 2) throw std::runtime_error("expected [B,T] target shape");
@@ -153,9 +152,9 @@ static std::vector<std::size_t> to_index_vec_flatten_BT(const ag::Variable& yBT)
     if (vals.size() != B * T) throw std::runtime_error("bad target size");
     std::vector<std::size_t> out; out.reserve(B * T);
     for (std::size_t i = 0; i < B * T; ++i) {
-        // stored as double ids in [0, V-1]
-        double d = vals[i];
-        if (d < 0) d = 0;
+        // stored as float ids in [0, V-1]
+        float d = vals[i];
+        if (d < 0.0f) d = 0.0f;
         out.push_back(static_cast<std::size_t>(d));
     }
     return out;
@@ -170,9 +169,9 @@ static std::vector<std::size_t> argmax_rows(const ag::Variable& logits) {
     std::vector<std::size_t> pred(N, 0);
     for (std::size_t i = 0; i < N; ++i) {
         std::size_t best = 0;
-        double bestv = vals[i * V + 0];
+        float bestv = vals[i * V + 0];
         for (std::size_t j = 1; j < V; ++j) {
-            double v = vals[i * V + j];
+            float v = vals[i * V + j];
             if (v > bestv) { bestv = v; best = j; }
         }
         pred[i] = best;
@@ -281,7 +280,7 @@ int main(int argc, char** argv) {
         std::size_t step = 0;
         while (train_ld.has_next()) {
             auto step_timer = ScopedTimer();
-            auto b = train_ld.next();            // b.x [B,T,V], b.y [B,T] (double IDs)
+            auto b = train_ld.next();            // b.x [B,T,V], b.y [B,T] (float IDs)
             auto logits = net.forward(b.x);      // [B*T,V]
             auto targets = to_index_vec_flatten_BT(b.y); // [B*T] size_t
             auto loss = ag::nn::cross_entropy(logits, targets);

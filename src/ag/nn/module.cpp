@@ -4,6 +4,7 @@
 #include "ag/nn/module.hpp"
 #include <algorithm>
 #include <unordered_set>
+#include <memory>
 
 namespace ag::nn {
 
@@ -21,7 +22,7 @@ std::vector<Variable*> Module::parameters() {
   for (auto& [name, p] : named_params_) if (p) out.push_back(p);
 
   // Children (only once via submodules_)
-  for (auto* child : submodules_) {
+  for (auto& child : submodules_) {
     if (!child) continue;
     auto child_params = child->parameters();
     out.insert(out.end(), child_params.begin(), child_params.end());
@@ -66,7 +67,7 @@ std::vector<std::pair<std::string, Variable*>> Module::named_parameters(const st
   }
 
   // Anonymous children (no name prefix)
-  for (auto* child : submodules_) {
+  for (auto& child : submodules_) {
     if (!child) continue;
     bool is_named = false;
     for (auto& kv : named_children_) if (kv.second == child) { is_named = true; break; }
@@ -80,33 +81,47 @@ std::vector<std::pair<std::string, Variable*>> Module::named_parameters(const st
 }
 
 void Module::zero_grad() {
-  for (auto* p : parameters()) {
-    if (p) p->zero_grad();
-  }
+  for (auto& sm : submodules_) if (sm) sm->zero_grad();
+  for (auto &p : _parameters()) p->n->grad.assign(p->n->value.size(), 0.0f);
 }
 
 void Module::train() {
   is_training_ = true;
   on_mode_change();
-  for (Module* sm : submodules_) if (sm) sm->train();
+  for (auto& sm : submodules_) if (sm) sm->train();
 }
 
 void Module::eval() {
   is_training_ = false;
   on_mode_change();
-  for (Module* sm : submodules_) if (sm) sm->eval();
+  for (auto& sm : submodules_) if (sm) sm->eval();
 }
 
 bool Module::training() const { return is_training_; }
 
+// register a non-owning (stack/member) child
 Module& Module::register_module(Module& m) {
-  submodules_.push_back(&m);
+  // wrap raw reference in a non-owning shared_ptr (no-delete deleter)
+  submodules_.push_back(std::shared_ptr<Module>(&m, [](Module*){}));
   return m;
 }
 
 Module& Module::register_module(const std::string& name, Module& m) {
-  submodules_.push_back(&m);
-  named_children_.push_back({name, &m});
+  auto ptr = std::shared_ptr<Module>(&m, [](Module*){});
+  submodules_.push_back(ptr);
+  named_children_.push_back({name, ptr});
+  return m;
+}
+
+// owning overloads
+std::shared_ptr<Module> Module::register_module(std::shared_ptr<Module> m) {
+  submodules_.push_back(m);
+  return m;
+}
+
+std::shared_ptr<Module> Module::register_module(const std::string& name, std::shared_ptr<Module> m) {
+  submodules_.push_back(m);
+  named_children_.push_back({name, m});
   return m;
 }
 

@@ -17,7 +17,6 @@
 #include <string>
 #include <type_traits>
 #include <vector>
-
 #include "ag/core/variables.hpp"
 #include "ag/ops/reshape.hpp"
 #include "ag/ops/activations.hpp"

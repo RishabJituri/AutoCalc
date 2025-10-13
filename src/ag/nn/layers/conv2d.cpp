@@ -22,13 +22,24 @@ void Conv2d::init_params_(float scale, unsigned long long seed) {
   // W: [C_out, C_in, KH, KW]
   const std::size_t nW = Cout * Cin * KH * KW;
   W_ = make_param_(randu_(nW, scale, seed), {Cout, Cin, KH, KW});
+  // register weight
+  register_parameter("weight", W_);
 
   // b: [C_out]
   if (bias_) {
     b_ = make_param_(randu_(Cout, scale, seed + 1337ULL), {Cout});
+    register_parameter("bias", b_);
   } else {
     b_ = Variable(std::vector<float>{}, {0}, /*requires_grad=*/false);
   }
+}
+
+// expose local params to Module system
+std::vector<ag::Variable*> Conv2d::_parameters() {
+  std::vector<ag::Variable*> out;
+  out.push_back(&W_);
+  if (bias_) out.push_back(&b_);
+  return out;
 }
 
 Variable Conv2d::forward(const Variable& x) {
@@ -164,39 +175,150 @@ Variable Conv2d::forward(const Variable& x) {
     const auto xstr = strides_for(xs);
     const auto wstr = strides_for(wshape);
 
-    for (std::size_t b = 0; b < B; ++b) {
-      for (std::size_t oc = 0; oc < Cout; ++oc) {
-        for (std::size_t oh = 0; oh < H_out; ++oh) {
-          for (std::size_t ow = 0; ow < W_out; ++ow) {
-            const std::size_t y_off = ((b*Cout + oc)*H_out + oh)*W_out + ow;
-            const float go = o->grad[y_off];
+    // Dimensions for im2col/GEMM
+    const std::size_t K = Cin * KH * KW;
+    const std::size_t rows = B * H_out * W_out;
+#ifdef AG_GEMM_MC
+    const std::size_t ROW_BLOCK = std::max<std::size_t>(1, AG_GEMM_MC);
+#else
+    const std::size_t ROW_BLOCK = 256;
+#endif
+    const std::size_t num_blocks = (rows + ROW_BLOCK - 1) / ROW_BLOCK;
 
-            // bias grad
-            if (bnode && bnode->requires_grad) {
-              bnode->grad[oc] += go;
+    // Allocate per-block partials for dW and dbias
+    std::vector<std::vector<float>> partials(num_blocks);
+    std::vector<std::vector<float>> bias_partials(num_blocks);
+    for (std::size_t bi = 0; bi < num_blocks; ++bi) {
+      const std::size_t r0 = bi * ROW_BLOCK;
+      const std::size_t r1 = std::min(rows, r0 + ROW_BLOCK);
+      const std::size_t rb = r1 - r0;
+      partials[bi].assign(K * Cout, 0.0f);
+      bias_partials[bi].assign(Cout, 0.0f);
+    }
+
+    const auto odata = o->grad.data();
+    const auto xdata = (xnode ? xnode->value.data() : nullptr);
+
+    // Parallel compute partial dW and bias sums per block
+    ag::parallel::parallel_for(num_blocks, /*grain=*/1, [&](std::size_t b0, std::size_t b1){
+      for (std::size_t bi = b0; bi < b1; ++bi) {
+        const std::size_t r0 = bi * ROW_BLOCK;
+        const std::size_t r1 = std::min(rows, r0 + ROW_BLOCK);
+        const std::size_t rb = r1 - r0;
+        if (rb == 0) continue;
+
+        // build im2col_block (rb x K) and Ygrad_block (rb x Cout)
+        std::vector<float> im2col_block(rb * K);
+        std::vector<float> Yg_block(rb * Cout);
+
+        for (std::size_t rr = 0; rr < rb; ++rr) {
+          const std::size_t r = r0 + rr;
+          const std::size_t b = r / (H_out * W_out);
+          std::size_t tmp = r % (H_out * W_out);
+          const std::size_t oh = tmp / W_out;
+          const std::size_t ow_ = tmp % W_out;
+          const int in_h0 = int(oh * SH) - int(PH);
+          const int in_w0 = int(ow_ * SW) - int(PW);
+          const std::size_t base_x_b = b * xstr[0];
+
+          // fill im2col row
+          std::size_t idx = 0;
+          for (std::size_t ic = 0; ic < Cin; ++ic) {
+            for (std::size_t kh = 0; kh < KH; ++kh) {
+              const int ih = in_h0 + int(kh * DH);
+              for (std::size_t kw = 0; kw < KW; ++kw) {
+                const int iw = in_w0 + int(kw * DW);
+                float v = 0.0f;
+                if (ih >= 0 && ih < int(H) && iw >= 0 && iw < int(W) && xdata) {
+                  const std::size_t x_off = base_x_b + ic * xstr[1] + std::size_t(ih) * xstr[2] + std::size_t(iw) * xstr[3];
+                  v = xdata[x_off];
+                }
+                im2col_block[rr * K + idx] = v;
+                ++idx;
+              }
             }
+          }
 
-            const int in_h0 = int(oh*SH) - int(PH);
-            const int in_w0 = int(ow*SW) - int(PW);
+          // fill Ygrad row and bias partial
+          for (std::size_t oc = 0; oc < Cout; ++oc) {
+            const std::size_t y_off = ((b * Cout + oc) * H_out + oh) * W_out + ow_;
+            const float go = odata[y_off];
+            Yg_block[rr * Cout + oc] = go;
+            bias_partials[bi][oc] += go;
+          }
+        }
 
-            for (std::size_t ic = 0; ic < Cin; ++ic) {
-              for (std::size_t kh = 0; kh < KH; ++kh) {
-                const int ih = in_h0 + int(kh*DH);
-                if (ih < 0 || ih >= int(H)) continue;
-                for (std::size_t kw = 0; kw < KW; ++kw) {
-                  const int iw = in_w0 + int(kw*DW);
-                  if (iw < 0 || iw >= int(W)) continue;
+        // Transpose im2col to (K x rb) for matmul A^T * Yg
+        std::vector<float> Atrans(K * rb);
+        for (std::size_t rr = 0; rr < rb; ++rr) {
+          for (std::size_t k = 0; k < K; ++k) {
+            Atrans[k * rb + rr] = im2col_block[rr * K + k];
+          }
+        }
 
-                  const std::size_t x_off = b*xstr[0] + ic*xstr[1] + std::size_t(ih)*xstr[2] + std::size_t(iw)*xstr[3];
-                  const std::size_t w_off = oc*wstr[0] + ic*wstr[1] + kh*wstr[2] + kw*wstr[3];
+        // Compute partial = Atrans (K x rb) * Yg_block (rb x Cout) -> (K x Cout)
+        Variable AtransV(Atrans, {K, rb}, /*requires_grad=*/false);
+        Variable YgV( Yg_block, {rb, Cout}, /*requires_grad=*/false);
+        Variable Part = ag::matmul(AtransV, YgV);
 
-                  // dW += x * go
-                  if (wnode && wnode->requires_grad) {
-                    wnode->grad[w_off] += (xnode ? xnode->value[x_off] : 0.0) * go;
-                  }
-                  // dX += W * go
-                  if (xnode && xnode->requires_grad) {
-                    xnode->grad[x_off] += (wnode ? wnode->value[w_off] : 0.0) * go;
+        // copy partial into storage
+        const auto partv = Part.n->value.data();
+        std::copy(partv, partv + (K * Cout), partials[bi].begin());
+      }
+    });
+
+    // Deterministic merge of partials into global wnode->grad and bias
+    if (wnode && wnode->requires_grad) {
+      if (wnode->grad.size() != wnode->value.size()) wnode->grad.assign(wnode->value.size(), 0.0f);
+      for (std::size_t bi = 0; bi < num_blocks; ++bi) {
+        const auto &P = partials[bi];
+        for (std::size_t kidx = 0; kidx < K; ++kidx) {
+          const std::size_t ic = kidx / (KH * KW);
+          const std::size_t rem = kidx % (KH * KW);
+          const std::size_t kh = rem / KW;
+          const std::size_t kw = rem % KW;
+          for (std::size_t oc = 0; oc < Cout; ++oc) {
+            const std::size_t w_off = oc * wstr[0] + ic * wstr[1] + kh * wstr[2] + kw * wstr[3];
+            wnode->grad[w_off] += P[kidx * Cout + oc];
+          }
+        }
+      }
+    }
+
+    if (bnode && bnode->requires_grad) {
+      if (bnode->grad.size() != Cout) bnode->grad.assign(Cout, 0.0f);
+      for (std::size_t bi = 0; bi < num_blocks; ++bi) {
+        for (std::size_t oc = 0; oc < Cout; ++oc) bnode->grad[oc] += bias_partials[bi][oc];
+      }
+    }
+
+    // Compute dX using original simple nested loops (keeps correctness)
+    if (xnode && xnode->requires_grad) {
+      if (xnode->grad.size() != xnode->value.size()) xnode->grad.assign(xnode->value.size(), 0.0f);
+      for (std::size_t b = 0; b < B; ++b) {
+        for (std::size_t oc = 0; oc < Cout; ++oc) {
+          for (std::size_t oh = 0; oh < H_out; ++oh) {
+            for (std::size_t ow = 0; ow < W_out; ++ow) {
+              const std::size_t y_off = ((b*Cout + oc)*H_out + oh)*W_out + ow;
+              const float go = o->grad[y_off];
+
+              const int in_h0 = int(oh*SH) - int(PH);
+              const int in_w0 = int(ow*SW) - int(PW);
+
+              for (std::size_t ic = 0; ic < Cin; ++ic) {
+                for (std::size_t kh = 0; kh < KH; ++kh) {
+                  const int ih = in_h0 + int(kh*DH);
+                  if (ih < 0 || ih >= int(H)) continue;
+                  for (std::size_t kw = 0; kw < KW; ++kw) {
+                    const int iw = in_w0 + int(kw*DW);
+                    if (iw < 0 || iw >= int(W)) continue;
+
+                    const std::size_t x_off = b*xstr[0] + ic*xstr[1] + std::size_t(ih)*xstr[2] + std::size_t(iw)*xstr[3];
+                    const std::size_t w_off = oc*wstr[0] + ic*wstr[1] + kh*wstr[2] + kw*wstr[3];
+
+                    if (xnode && xnode->requires_grad) {
+                      xnode->grad[x_off] += (wnode ? wnode->value[w_off] : 0.0) * go;
+                    }
                   }
                 }
               }

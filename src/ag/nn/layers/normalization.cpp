@@ -72,6 +72,10 @@ Variable BatchNorm2d::forward(const Variable& X) {
     var  = running_var .n->value;
   }
 
+  // register parameters (gamma/beta)
+  register_parameter("gamma", gamma);
+  register_parameter("beta", beta);
+
   // prepare output
   auto out = std::make_shared<Node>();
   out->shape = X.n->shape;
@@ -227,6 +231,13 @@ Variable BatchNorm2d::forward(const Variable& X) {
   };
 
   return make_from_node(out);
+}
+
+std::vector<ag::Variable*> BatchNorm2d::_parameters() {
+  std::vector<ag::Variable*> out;
+  out.push_back(&gamma);
+  out.push_back(&beta);
+  return out;
 }
 
 } // namespace ag::nn

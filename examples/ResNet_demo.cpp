@@ -17,7 +17,6 @@
 #include <string>
 #include <type_traits>
 #include <vector>
-
 #include "ag/core/variables.hpp"
 #include "ag/ops/reshape.hpp"
 #include "ag/ops/activations.hpp"
@@ -25,6 +24,7 @@
 #include "ag/nn/layers/conv2d.hpp"
 #include "ag/nn/layers/linear.hpp"
 #include "ag/nn/layers/pooling.hpp"
+#include "ag/nn/layers/normalization.hpp"
 #include "ag/nn/loss.hpp"
 #include "ag/nn/optim/sgd.hpp"   // header path; type is ag::optim::SGD
 
@@ -135,33 +135,115 @@ static std::vector<std::size_t> to_index_vec(const ag::Variable& ybat) {
     return out;
 }
 
-// --------- Model (no Module inheritance; per-layer optimization like tests) ---------
-struct SimpleCNN {
-    ag::nn::Conv2d   conv1{1, 8,  {3,3}, {1,1}, {1,1}};
-    ag::nn::Conv2d   conv2{8, 16, {3,3}, {1,1}, {1,1}};
-    ag::nn::MaxPool2d pool{2,2};
-    ag::nn::Linear   fc1{16*7*7, 64};
-    ag::nn::Linear   fc2{64, 10};
+// --------- Model (ResNet-ish) ---------
+struct BasicBlock : public ag::nn::Module {
+    ag::nn::Conv2d conv1;
+    ag::nn::BatchNorm2d bn1;
+    ag::nn::Conv2d conv2;
+    ag::nn::BatchNorm2d bn2;
+    bool downsample;
+    ag::nn::Conv2d downconv;
+    ag::nn::BatchNorm2d downbn;
 
-    ag::Variable forward(const ag::Variable& x) {
-        auto h = ag::relu(conv1.forward(x));
-        h = pool.forward(h);
-        h = ag::relu(conv2.forward(h));
-        h = pool.forward(h);
-        h = ag::flatten(h, 1);
-        h = ag::relu(fc1.forward(h));
-        return fc2.forward(h);
+    BasicBlock(std::size_t in_c, std::size_t out_c, std::size_t stride=1)
+    : conv1(in_c, out_c, {3,3}, {stride,stride}, {1,1}),
+      bn1(out_c),
+      conv2(out_c, out_c, {3,3}, {1,1}, {1,1}),
+      bn2(out_c),
+      downsample(stride!=1),
+      downconv(in_c, out_c, {1,1}, {stride,stride}, {0,0}),
+      downbn(out_c) {
+      // register child modules so parameters are discoverable
+      register_module("conv1", conv1);
+      register_module("bn1", bn1);
+      register_module("conv2", conv2);
+      register_module("bn2", bn2);
+      if (downsample) { register_module("downconv", downconv); register_module("downbn", downbn); }
     }
 
-    // mode passthroughs so caller can do net.train()/net.eval()
-    void train() { conv1.train(); conv2.train(); fc1.train(); /*pool has no state*/ }
-    void eval()  { conv1.eval();  conv2.eval();  fc1.eval();  }
-    void zero_grad() { conv1.zero_grad(); conv2.zero_grad(); fc1.zero_grad(); fc2.zero_grad(); }
+    ag::Variable forward(const ag::Variable& x) {
+      auto out = ag::relu(bn1.forward(conv1.forward(x)));
+      out = bn2.forward(conv2.forward(out));
+      ag::Variable resid = x;
+      if (downsample) resid = downbn.forward(downconv.forward(x));
+      out = ag::relu(ag::add(out, resid));
+      return out;
+    }
+
+    void train() { conv1.train(); bn1.train(); conv2.train(); bn2.train(); if (downsample) { downconv.train(); downbn.train(); } }
+    void eval()  { conv1.eval();  bn1.eval();  conv2.eval();  bn2.eval();  if (downsample) { downconv.eval(); downbn.eval(); } }
+    void zero_grad() {
+      conv1.zero_grad(); bn1.zero_grad(); conv2.zero_grad(); bn2.zero_grad(); if (downsample) { downconv.zero_grad(); downbn.zero_grad(); }
+    }
+  protected:
+    std::vector<ag::Variable*> _parameters() override { return {}; }
+};
+
+struct ResNet : public ag::nn::Module {
+    ag::nn::Conv2d conv1{1, 64, {3,3}, {1,1}, {1,1}};
+    ag::nn::BatchNorm2d bn1{64};
+    std::vector<std::vector<std::shared_ptr<BasicBlock>>> layers;
+    ag::nn::Linear fc{512, 10};
+
+    ResNet() {
+      // layer configuration like ResNet-34-ish: [3,4,6,3]
+      std::vector<int> blocks = {3,4,6,3};
+      std::vector<std::size_t> channels = {64,128,256,512};
+      std::size_t in_c = 64;
+      layers.resize(blocks.size());
+      for (std::size_t i = 0; i < blocks.size(); ++i) {
+        for (int j = 0; j < blocks[i]; ++j) {
+          std::size_t stride = (j==0 && i>0) ? 2 : 1;
+          auto bp = std::make_shared<BasicBlock>(in_c, channels[i], stride);
+          layers[i].push_back(bp);
+          in_c = channels[i];
+        }
+      }
+      // register top-level modules so parameters are discoverable
+      register_module("conv1", conv1);
+      register_module("bn1", bn1);
+      register_module("fc", fc);
+      for (std::size_t i = 0; i < layers.size(); ++i) {
+        for (std::size_t j = 0; j < layers[i].size(); ++j) {
+          std::ostringstream ns; ns << "layer" << i << "_block" << j;
+          register_module(ns.str(), *layers[i][j]);
+        }
+      }
+    }
+
+    ag::Variable forward(const ag::Variable& x) {
+      auto out = ag::relu(bn1.forward(conv1.forward(x)));
+      for (auto &stage : layers) for (auto &blkptr : stage) out = blkptr->forward(out);
+      // global average pool over H,W
+      const auto shp = out.shape(); // [B,C,H,W]
+      const std::size_t B = shp[0], C = shp[1], H = shp[2], W = shp[3];
+      std::vector<float> pooled(B * C, 0.0f);
+      const auto v = out.value();
+      for (std::size_t b = 0; b < B; ++b) {
+        for (std::size_t c = 0; c < C; ++c) {
+          double acc = 0.0;
+          const std::size_t base = b * C * H * W + c * H * W;
+          for (std::size_t i = 0; i < H*W; ++i) acc += v[base + i];
+          pooled[b*C + c] = static_cast<float>(acc / double(H*W));
+        }
+      }
+      ag::Variable yv(pooled, {B, C}, /*requires_grad=*/true);
+      auto h = ag::relu(fc.forward(yv));
+      return h;
+    }
+
+    void train() { conv1.train(); bn1.train(); for (auto &s: layers) for (auto &b: s) b->train(); fc.train(); }
+    void eval()  { conv1.eval();  bn1.eval();  for (auto &s: layers) for (auto &b: s) b->eval();  fc.eval(); }
+    void zero_grad() { conv1.zero_grad(); bn1.zero_grad(); for (auto &s: layers) for (auto &b: s) b->zero_grad(); fc.zero_grad(); }
+
+    // Module-local parameters (none; all params live in registered submodules)
+  protected:
+    std::vector<ag::Variable*> _parameters() override { return {}; }
 };
 
 int main(int argc, char** argv) {
     fs::path data_dir = "Data";
-    int epochs = 2;
+    int epochs = 10;
     int batch = 128;
     float lr = 0.1;
 
@@ -191,7 +273,7 @@ int main(int argc, char** argv) {
     ag::data::DataLoader train_ld(train_ds, opts_train);
     ag::data::DataLoader test_ld (test_ds,  opts_test);
 
-    SimpleCNN net;
+    ResNet net;
     ag::nn::SGD opt(lr, /*momentum=*/0.9, /*nesterov=*/true, /*weight_decay=*/0.0);
 
     auto t0 = std::chrono::steady_clock::now();
@@ -212,11 +294,8 @@ int main(int argc, char** argv) {
             auto loss    = ag::nn::cross_entropy(logits, targets);
             loss.backward();
 
-            // per-layer updates (matches your SGD test)
-            opt.step(net.conv1);
-            opt.step(net.conv2);
-            opt.step(net.fc1);
-            opt.step(net.fc2);
+            // optimizer uses Module::parameters(); call once on the module
+            opt.step(net);
             net.zero_grad();
 
             // update running average weighted by batch size
@@ -267,7 +346,7 @@ int main(int argc, char** argv) {
     auto t1 = std::chrono::steady_clock::now();
     float seconds = std::chrono::duration<float>(t1 - t0).count();
 
-    std::ofstream out("results_mnist.txt", std::ios::app);
+    std::ofstream out("results_resnet.txt", std::ios::app);
     out << "Timestamp: " << now_string() << "\n"
         << "Wall time (s): " << std::fixed << std::setprecision(3) << seconds << "\n"
         << "Test accuracy (%): " << std::setprecision(2) << acc << "\n"

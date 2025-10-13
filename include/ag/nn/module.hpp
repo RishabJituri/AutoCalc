@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <memory>
 
 #include "ag/core/variables.hpp"  // assumes ag::Variable lives here
 
@@ -46,14 +47,19 @@ public:
   bool training() const;
 
   // Hierarchy (children)
-  Module& register_module(Module& m);                       // anonymous child
-  Module& register_module(const std::string& name, Module& m); // named child
+  // register a non-owning (stack/member) child
+  Module& register_module(Module& m);
+  Module& register_module(const std::string& name, Module& m);
+  
+  // register an owning child (preferred for heap-held children)
+  std::shared_ptr<Module> register_module(std::shared_ptr<Module> m);
+  std::shared_ptr<Module> register_module(const std::string& name, std::shared_ptr<Module> m);
 
   // Parameter registration (for naming/checkpointing)
   Module& register_parameter(const std::string& name, Variable& v);
 
   // Optional advanced access
-  std::vector<Module*>& submodules() { return submodules_; }
+  std::vector<std::shared_ptr<Module>>& submodules() { return submodules_; }
 
 protected:
   // Derived classes can override this to react to mode changes.
@@ -66,8 +72,8 @@ private:
   bool is_training_ = true;
 
   // Children for recursion
-  std::vector<Module*> submodules_;
-  std::vector<std::pair<std::string, Module*>> named_children_;
+  std::vector<std::shared_ptr<Module>> submodules_;
+  std::vector<std::pair<std::string, std::shared_ptr<Module>>> named_children_;
 
   // Explicitly named parameters local to *this* module
   std::vector<std::pair<std::string, Variable*>> named_params_;

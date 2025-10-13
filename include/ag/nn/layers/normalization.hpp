@@ -25,7 +25,7 @@ struct BatchNorm2d : Module {
 
 protected:
   // Let the base class collect parameters recursively
-  std::vector<Variable*> _parameters() override { return { &gamma, &beta }; }
+  std::vector<Variable*> _parameters() override;
   void on_mode_change() override {} // optional
 };
 

@@ -16,10 +16,12 @@ void Linear::init_params_(float scale, unsigned long long seed) {
   const std::size_t nW = in * out;
   auto wdata = randu_(nW, scale, seed);
   W_ = make_param_(wdata, {in, out});
+  register_parameter("weight", W_);
 
   if (bias_) {
     auto bdata = randu_(out, scale, seed + 1);
     b_ = make_param_(bdata, {out});
+    register_parameter("bias", b_);
   }
 }
 
@@ -31,6 +33,13 @@ Variable Linear::forward(const Variable& x) {
     y = ag::add(y, b_);
   }
   return y;
+}
+
+std::vector<ag::Variable*> Linear::_parameters() {
+  std::vector<ag::Variable*> out;
+  out.push_back(&W_);
+  if (bias_) out.push_back(&b_);
+  return out;
 }
 
 } // namespace ag::nn

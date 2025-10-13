@@ -46,6 +46,7 @@ FAST_BUILD_DIR := $(BUILD_DIR)/fast
 FAST_OBJ_DIR   := $(FAST_BUILD_DIR)/obj
 FAST_MNIST_BIN := $(FAST_BUILD_DIR)/mnist_demo
 FAST_LSTM_BIN  := $(FAST_BUILD_DIR)/lstm_shakespeare
+FAST_RESNET_BIN := $(FAST_BUILD_DIR)/resnet_demo
 
 # ===============================================================
 # Sources
@@ -55,6 +56,7 @@ TEST_FILES  := $(wildcard tests/*.cpp)
 
 MNIST_EXAMPLE := examples/mnist_demo.cpp
 LSTM_EXAMPLE  := examples/lstm_shakespeare.cpp
+RESNET_EXAMPLE := examples/ResNet_demo.cpp
 
 # ---- Sanity pool test (separate tiny exe) ----
 SANE_SRC   := parallel_sanity/sanity_pool.cpp
@@ -76,7 +78,7 @@ FAST_DEPS   := $(FAST_OBJS:.o=.d)
 # ===============================================================
 # Phonies
 # ===============================================================
-.PHONY: all test demo run-demo fast-mnist run-fast-mnist fast-lstm run-fast-lstm clean sanity-pool run-sanity
+.PHONY: all test demo run-demo fast-mnist run-fast-mnist fast-lstm run-fast-lstm fast-resnet run-fast-resnet clean sanity-pool run-sanity
 
 all: test fast-mnist fast-lstm
 
@@ -131,14 +133,24 @@ $(FAST_MNIST_BIN): $(FAST_OBJ_DIR)/$(MNIST_EXAMPLE:.cpp=.o) $(FAST_OBJS)
 run-fast-mnist: fast-mnist
 	./$(FAST_MNIST_BIN) $(ARGS)
 
+fast-resnet: $(FAST_RESNET_BIN)
+
+$(FAST_RESNET_BIN): $(FAST_OBJ_DIR)/$(RESNET_EXAMPLE:.cpp=.o) $(FAST_OBJS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(FAST_CXXFLAGS) $(INCLUDES) $^ -o $@ $(FAST_LDFLAGS) $(THREAD_LIBS)
+
+run-fast-resnet: fast-resnet
+	./$(FAST_RESNET_BIN) $(ARGS)
+
 fast-lstm: $(FAST_LSTM_BIN)
+
+run-fast-lstm: fast-lstm
+	./$(FAST_LSTM_BIN) $(ARGS)
+
 
 $(FAST_LSTM_BIN): $(FAST_OBJ_DIR)/$(LSTM_EXAMPLE:.cpp=.o) $(FAST_OBJS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(FAST_CXXFLAGS) $(INCLUDES) $^ -o $@ $(FAST_LDFLAGS) $(THREAD_LIBS)
-
-run-fast-lstm: fast-lstm
-	./$(FAST_LSTM_BIN) $(ARGS)
 
 # Compile rule (fast) for any .cpp
 $(FAST_OBJ_DIR)/%.o: %.cpp
