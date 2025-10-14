@@ -1,4 +1,3 @@
-
 // ag_bindings.cpp — single TU pybind11 bindings for ag::Variable and ops.
 // Drop this in your bindings/ folder (or src/) and build with pybind11.
 //
@@ -7,53 +6,12 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/numpy.h>
 
 namespace py = pybind11;
 
 // ---- flexible includes ----
-#if __has_include("ag/core/variables.hpp")
-  #include "ag/core/variables.hpp"
-#else
-  #include "variables.hpp"
-#endif
-
-#if __has_include("ag/ops/activations.hpp")
-  #include "ag/ops/activations.hpp"
-#else
-  #include "activations.hpp"
-#endif
-
-#if __has_include("ag/ops/elementwise.hpp")
-  #include "ag/ops/elementwise.hpp"
-#else
-  #include "elementwise.hpp"
-#endif
-
-#if __has_include("ag/ops/linalg.hpp")
-  #include "ag/ops/linalg.hpp"
-#else
-  #include "linalg.hpp"
-#endif
-
-#if __has_include("ag/ops/reduce.hpp")
-  #include "ag/ops/reduce.hpp"
-#else
-  #include "reduce.hpp"
-#endif
-
-#if __has_include("ag/ops/reshape.hpp")
-  #include "ag/ops/reshape.hpp"
-#else
-  #include "reshape.hpp"
-#endif
-
-#if __has_include("ag/core/graph.hpp")
-  #include "ag/core/graph.hpp"
-#elif __has_include("ag/ops/graph.hpp")
-  #include "ag/ops/graph.hpp"
-#else
-  #include "graph.hpp"
-#endif
+#include "ag/all.hpp"
 
 // Optional: version string helper
 #ifndef AG_BINDINGS_VERSION
@@ -84,9 +42,23 @@ PYBIND11_MODULE(ag, m) {
       .def("__enter__", &PyNoGradCtx::enter, py::return_value_policy::reference_internal)
       .def("__exit__", &PyNoGradCtx::exit);
 
-  // --- Opaque Variable type (constructed in C++; treated as handle in Python) ---
-  // We don't expose internals here; you can add .value(), .grad(), etc. later if desired.
-  py::class_<ag::Variable>(m, "Variable");
+  // --- Variable type: expose constructor and useful accessors ---
+  py::class_<ag::Variable>(m, "Variable")
+    .def(py::init<const std::vector<float>&, const std::vector<std::size_t>&, bool>(),
+         py::arg("value"), py::arg("shape"), py::arg("requires_grad") = false)
+    .def_static("from_numpy", [](py::array_t<float, py::array::c_style | py::array::forcecast> arr, bool requires_grad){
+        py::buffer_info info = arr.request();
+        std::vector<float> data((float*)info.ptr, (float*)info.ptr + info.size);
+        std::vector<std::size_t> shape(info.shape.begin(), info.shape.end());
+        return ag::Variable(data, shape, requires_grad);
+    }, py::arg("array"), py::arg("requires_grad") = false)
+    .def("value", [](const ag::Variable& v){ return v.value(); })
+    .def("grad", [](const ag::Variable& v){ return v.grad(); })
+    .def("shape", [](const ag::Variable& v){ return v.shape(); })
+    .def("requires_grad", &ag::Variable::requires_grad)
+    .def("zero_grad", [](ag::Variable& v){ v.zero_grad(); })
+    .def("backward", [](ag::Variable& v){ v.backward(); })
+    ;
 
   // --- Graph helpers ---
   m.def("stop_gradient", &ag::stop_gradient, py::arg("x"));

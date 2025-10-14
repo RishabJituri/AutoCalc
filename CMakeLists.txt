@@ -90,6 +90,36 @@ if(Threads_FOUND)
   set(THREADS_LIB Threads::Threads)
 endif()
 
+# ------------------------ Python bindings (pybind11) ------------------------
+find_package(Python COMPONENTS Interpreter Development QUIET)
+find_package(pybind11 CONFIG QUIET)
+if(NOT pybind11_FOUND)
+  message(STATUS "pybind11 not found via find_package(pybind11). You can install it into your active Python: python3 -m pip install --user pybind11")
+endif()
+
+if(pybind11_FOUND AND Python_FOUND)
+  # Build core library from project sources and make it PIC so it can be linked
+  add_library(autocalc_lib STATIC ${SRC_FILES})
+  set_target_properties(autocalc_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  if(_incs)
+    target_include_directories(autocalc_lib PUBLIC ${_incs})
+  endif()
+  target_compile_features(autocalc_lib PRIVATE cxx_std_17)
+
+  add_library(ag_python MODULE bindings/variable.cpp)
+  target_compile_features(ag_python PRIVATE cxx_std_17)
+  if(_incs)
+    target_include_directories(ag_python PRIVATE ${_incs})
+  endif()
+  # Link the core static library so the module exposes the project symbols
+  target_link_libraries(ag_python PRIVATE autocalc_lib pybind11::module ${THREADS_LIB})
+  set_target_properties(ag_python PROPERTIES PREFIX "" OUTPUT_NAME "ag")
+  set_target_properties(ag_python PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/python")
+  add_custom_target(build-bindings DEPENDS ag_python)
+else()
+  message(STATUS "Python bindings target skipped (pybind11 or Python not available).")
+endif()
+
 # ===============================================================
 # Targets
 # ===============================================================
