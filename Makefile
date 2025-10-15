@@ -24,7 +24,7 @@ else
 endif
 
 FAST_CXXFLAGS := -std=c++17 -O3 -DNDEBUG -Wall -Wextra -fno-omit-frame-pointer \
-                 -ffast-math $(ARCH_FAST) -MMD -MP
+                  $(ARCH_FAST) -MMD -MP
 FAST_LDFLAGS  :=
 
 # Some platforms want pthread explicitly
