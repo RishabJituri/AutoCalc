@@ -14,9 +14,18 @@
 
 // NN
 #include "ag/nn/module.hpp"
+#include "ag/nn/sequential.hpp"
 #include "ag/nn/layers/conv2d.hpp"
 #include "ag/nn/layers/linear.hpp"
 #include "ag/nn/layers/normalization.hpp"
+
+// Optional NN extras (unconditional includes)
+#include "ag/nn/layers/pooling.hpp"
+#include "ag/nn/layers/dropout.hpp"
+#include "ag/nn/layers/lstm.hpp"
+
+#include "ag/nn/loss.hpp"
+#include "ag/nn/optim/sgd.hpp"
 
 // Data / utils (optional)
 #include "ag/data/dataloader.hpp"

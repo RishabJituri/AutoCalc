@@ -1,7 +1,8 @@
 import ag
 import numpy as np
+import ag, sys
 
-print("playing_around: ag module attributes:\n", dir(ag))
+
 
 A_arr = np.random.randn(2, 4).astype(np.float32)
 B_arr = np.random.randn(4, 3).astype(np.float32)
@@ -23,16 +24,16 @@ def var_to_numpy(v):
     shp = tuple(v.shape())
     return vals.reshape(shp)
 
-if hasattr(ag, 'ops') and hasattr(ag.ops, 'matmul'):
+if hasattr(ag, 'matmul'):
     try:
-        C_var = ag.ops.matmul(A_var, B_var)
+        C_var = ag.matmul(A_var, B_var)
         C_ag = var_to_numpy(C_var)
-        print("ag.ops.matmul -> numpy shape:", C_ag.shape)
+        print("ag.matmul -> numpy shape:", C_ag.shape)
         print("ag vs numpy close:", np.allclose(C_ag, C_np, atol=1e-5))
     except Exception as e:
-        print("ag.ops.matmul invocation failed:\n", repr(e))
+        print("ag.matmul invocation failed:\n", repr(e))
 else:
-    print("ag.ops.matmul not available; falling back to numpy")
+    print("ag.matmul not available; falling back to numpy")
 
 # elementwise multiply test using Variables
 x_arr = np.random.randn(5).astype(np.float32)
@@ -40,14 +41,14 @@ y_arr = np.random.randn(5).astype(np.float32)
 x_var = ag.Variable(x_arr.ravel().tolist(), [5], False)
 y_var = ag.Variable(y_arr.ravel().tolist(), [5], False)
 print("x_var[:3]", var_to_numpy(x_var)[:3], "y_var[:3]", var_to_numpy(y_var)[:3])
-if hasattr(ag, 'ops') and hasattr(ag.ops, 'mul'):
+if hasattr(ag, 'mul'):
     try:
-        r_var = ag.ops.mul(x_var, y_var)
+        r_var = ag.mul(x_var, y_var)
         r_np = var_to_numpy(r_var).ravel()
-        print("ag.ops.mul first 3:", r_np[:3])
+        print("ag.mul first 3:", r_np[:3])
     except Exception as e:
-        print("ag.ops.mul failed:", e)
+        print("ag.mul failed:", e)
 else:
-    print("ag.ops.mul not available; numpy fallback:", (x_arr * y_arr)[:3])
+    print("ag.mul not available; numpy fallback:", (x_arr * y_arr)[:3])
 
 print("done")

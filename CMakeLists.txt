@@ -106,7 +106,7 @@ if(pybind11_FOUND AND Python_FOUND)
   endif()
   target_compile_features(autocalc_lib PRIVATE cxx_std_17)
 
-  add_library(ag_python MODULE bindings/variable.cpp)
+  add_library(ag_python MODULE bindings/variable.cpp bindings/nn.cpp)
   target_compile_features(ag_python PRIVATE cxx_std_17)
   if(_incs)
     target_include_directories(ag_python PRIVATE ${_incs})

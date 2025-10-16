@@ -1,14 +1,17 @@
-// ag_bindings.cpp — single TU pybind11 bindings for ag::Variable and ops.
+// ag_bindings.cpp — single TU pybind11 bindings for ag::Variable and m.
 // Drop this in your bindings/ folder (or src/) and build with pybind11.
 //
 // It tries both "ag/..." and local includes so it works whether your headers
 // live under include/ag/... or side-by-side with this file.
-
+#include <memory>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 
 namespace py = pybind11;
+
+// forward declare nn binder implemented in bindings/nn.cpp
+void bind_nn(py::module_ &m);
 
 // ---- flexible includes ----
 #include "ag/all.hpp"
@@ -29,7 +32,9 @@ struct PyNoGradCtx {
 } // anon
 
 PYBIND11_MODULE(ag, m) {
-  m.doc() = "Minimal pybind11 bindings for ag::Variable core and ops";
+  // auto m = m.def_submodule("Variable","This is the variable (tensor) class");
+  // auto nn = m.def_submodule("nn");
+  bind_nn(m);
   m.attr("__version__") = AG_BINDINGS_VERSION;
 
   // --- Grad mode ---
@@ -64,48 +69,47 @@ PYBIND11_MODULE(ag, m) {
   m.def("stop_gradient", &ag::stop_gradient, py::arg("x"));
   m.def("detach", &ag::detach, py::arg("x"));
 
-  // --- Submodule for ops ---
-  auto ops = m.def_submodule("ops", "Tensor ops that operate on ag::Variable");
+  // auto m = m.def_submodule("m", "Tensor ops that operate on ag::Variable");
 
   // Elementwise basic
-  ops.def("add", &ag::add, "Elementwise add", py::arg("a"), py::arg("b"));
-  ops.def("sub", &ag::sub, "Elementwise subtract", py::arg("a"), py::arg("b"));
-  ops.def("mul", &ag::mul, "Elementwise multiply", py::arg("a"), py::arg("b"));
-  ops.def("div", &ag::div, "Elementwise divide", py::arg("a"), py::arg("b"));
-  ops.def("neg", &ag::neg, "Elementwise negate", py::arg("x"));
+  m.def("add", &ag::add, "Elementwise add", py::arg("a"), py::arg("b"));
+  m.def("sub", &ag::sub, "Elementwise subtract", py::arg("a"), py::arg("b"));
+  m.def("mul", &ag::mul, "Elementwise multiply", py::arg("a"), py::arg("b"));
+  m.def("div", &ag::div, "Elementwise divide", py::arg("a"), py::arg("b"));
+  m.def("neg", &ag::neg, "Elementwise negate", py::arg("x"));
 
   // Elementwise trig/exp
-  ops.def("sin", &ag::sinv, "Elementwise sin", py::arg("x"));
-  ops.def("cos", &ag::cosv, "Elementwise cos", py::arg("x"));
-  ops.def("exp", &ag::expv, "Elementwise exp", py::arg("x"));
-  ops.def("pow", &ag::pow, "Elementwise power", py::arg("base"), py::arg("exponent"));
+  m.def("sin", &ag::sinv, "Elementwise sin", py::arg("x"));
+  m.def("cos", &ag::cosv, "Elementwise cos", py::arg("x"));
+  m.def("exp", &ag::expv, "Elementwise exp", py::arg("x"));
+  m.def("pow", &ag::pow, "Elementwise power", py::arg("base"), py::arg("exponent"));
 
   // Activations
-  ops.def("relu", &ag::relu, py::arg("x"));
-  ops.def("sigmoid", &ag::sigmoid, py::arg("x"));
-  ops.def("tanh", &ag::tanhv, py::arg("x"));
-  ops.def("log",  &ag::logv,  py::arg("x"));
-  ops.def("clamp", &ag::clamp, py::arg("x"), py::arg("lo"), py::arg("hi"));
+  m.def("relu", &ag::relu, py::arg("x"));
+  m.def("sigmoid", &ag::sigmoid, py::arg("x"));
+  m.def("tanh", &ag::tanhv, py::arg("x"));
+  m.def("log",  &ag::logv,  py::arg("x"));
+  m.def("clamp", &ag::clamp, py::arg("x"), py::arg("lo"), py::arg("hi"));
 
   // Linalg
-  ops.def("matmul", &ag::matmul, py::arg("A"), py::arg("B"));
+  m.def("matmul", &ag::matmul, py::arg("A"), py::arg("B"));
 
   // Reduce / broadcast
-  ops.def("reduce_sum", &ag::reduce_sum,
+  m.def("reduce_sum", &ag::reduce_sum,
           py::arg("x"),
           py::arg("axes") = std::vector<int>{},
           py::arg("keepdims") = false);
 
-  ops.def("reduce_mean", &ag::reduce_mean,
+  m.def("reduce_mean", &ag::reduce_mean,
           py::arg("x"),
           py::arg("axes") = std::vector<int>{},
           py::arg("keepdims") = false);
 
-  ops.def("broadcast_to", &ag::broadcast_to, py::arg("x"), py::arg("shape"));
+  m.def("broadcast_to", &ag::broadcast_to, py::arg("x"), py::arg("shape"));
 
   // Reshape
-  ops.def("flatten", &ag::flatten, py::arg("x"), py::arg("start_dim") = std::size_t{1});
-  ops.def("reshape", &ag::reshape, py::arg("x"), py::arg("new_shape"));
+  m.def("flatten", &ag::flatten, py::arg("x"), py::arg("start_dim") = std::size_t{1});
+  m.def("reshape", &ag::reshape, py::arg("x"), py::arg("new_shape"));
 
   // Small QoL aliases at top-level (optional)
   m.def("matmul", &ag::matmul, py::arg("A"), py::arg("B"));
