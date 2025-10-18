@@ -1,6 +1,5 @@
 import ag
 import numpy as np
-import ag, sys
 
 
 
