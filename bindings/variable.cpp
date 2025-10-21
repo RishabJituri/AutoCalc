@@ -63,6 +63,75 @@ PYBIND11_MODULE(ag, m) {
     .def("requires_grad", &ag::Variable::requires_grad)
     .def("zero_grad", [](ag::Variable& v){ v.zero_grad(); })
     .def("backward", [](ag::Variable& v){ v.backward(); })
+    // matmul operator support: a @ b
+    .def("__matmul__", [](const ag::Variable& a, const ag::Variable& b){ return ag::matmul(a,b); })
+    // .T property returns a materialized transpose (last-two-dims swapped)
+    .def_property_readonly("T", [](const ag::Variable& v){ return ag::transpose(v); })
+    // at(begin,end) method
+    .def("at", [](const ag::Variable& v, const std::vector<std::size_t>& begin, const std::vector<std::size_t>& end){
+      return ag::at(v, begin, end);
+    }, py::arg("begin"), py::arg("end"))
+    // __getitem__ - accept tuple of slices/ints
+    .def("__getitem__", [](const ag::Variable& v, py::object idx){
+      std::vector<std::size_t> shape = v.shape();
+      size_t r = shape.size();
+      std::vector<std::size_t> begin(r), end(r);
+      // default full slice
+      for (size_t i=0;i<r;++i){ begin[i]=0; end[i]=shape[i]; }
+
+      if (py::isinstance<py::tuple>(idx) || py::isinstance<py::list>(idx)) {
+        py::sequence seq = idx.cast<py::sequence>();
+        size_t provided = seq.size();
+        if (provided > r) throw std::invalid_argument("too many indices");
+        for (size_t i = 0; i < provided; ++i) {
+          py::object it = seq[i];
+          if (py::isinstance<py::int_>(it)) {
+            long vidx = it.cast<long>();
+            if (vidx < 0) throw std::invalid_argument("negative indices not supported");
+            begin[i] = (size_t)vidx; end[i] = (size_t)vidx + 1;
+          } else if (py::isinstance<py::slice>(it)) {
+            py::slice s = it.cast<py::slice>();
+            py::ssize_t start, stop, step, slicelength;
+            if (!s.compute(shape[i], &start, &stop, &step, &slicelength)) throw std::invalid_argument("invalid slice");
+            if (step != 1) throw std::invalid_argument("slice step != 1 not supported");
+            begin[i] = (size_t)start; end[i] = (size_t)stop;
+          } else {
+            throw std::invalid_argument("unsupported index type");
+          }
+        }
+      } else if (py::isinstance<py::int_>(idx)) {
+        // single integer index applies to leading dimension (dim 0)
+        long vidx = idx.cast<long>(); if (vidx < 0) throw std::invalid_argument("negative indices not supported");
+        begin[0] = (size_t)vidx; end[0] = (size_t)vidx + 1;
+      } else if (py::isinstance<py::slice>(idx)) {
+        // single slice applies to leading dimension (dim 0)
+        py::slice s = idx.cast<py::slice>();
+        if (r == 0) throw std::invalid_argument("cannot slice scalar");
+        py::ssize_t start, stop, step, slicelength;
+        if (!s.compute(shape[0], &start, &stop, &step, &slicelength)) throw std::invalid_argument("invalid slice");
+        if (step != 1) throw std::invalid_argument("slice step != 1 not supported");
+        begin[0] = (size_t)start; end[0] = (size_t)stop;
+      } else {
+        throw std::invalid_argument("unsupported index type");
+      }
+
+      auto outv = ag::at(v, begin, end);
+      // Collapse dims corresponding to integer indices to mimic numpy's rank reduction
+      std::vector<std::size_t> new_shape;
+      for (size_t i = 0; i < begin.size(); ++i) {
+        if (!(end[i] == begin[i] + 1)) new_shape.push_back(end[i] - begin[i]);
+      }
+      if (new_shape.size() != begin.size()) {
+        // reshape to remove unit-dims
+        if (new_shape.empty()) {
+          // return scalar as shape [1] -> reshape to {1}? we can return flattened vector
+          return ag::reshape(outv, std::vector<std::size_t>{});
+        } else {
+          return ag::reshape(outv, new_shape);
+        }
+      }
+      return outv;
+    })
     ;
 
   // --- Graph helpers ---
@@ -93,6 +162,7 @@ PYBIND11_MODULE(ag, m) {
 
   // Linalg
   m.def("matmul", &ag::matmul, py::arg("A"), py::arg("B"));
+  m.def("transpose", &ag::transpose, py::arg("A"));
 
   // Reduce / broadcast
   m.def("reduce_sum", &ag::reduce_sum,

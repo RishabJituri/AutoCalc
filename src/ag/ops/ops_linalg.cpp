@@ -297,8 +297,9 @@ Variable matmul(const Variable& A, const Variable& B) {
       // Ensure grads allocated
       if (An->grad.size() != An->value.size()) An->grad.assign(An->value.size(), 0.0f);
       if (Bn->grad.size() != Bn->value.size()) Bn->grad.assign(Bn->value.size(), 0.0f);
-      std::fill(An->grad.begin(), An->grad.end(), 0.0f);  // dA buffer (x.grad)
-      std::fill(Bn->grad.begin(), Bn->grad.end(), 0.0f);  // dB buffer (W.grad)
+      // NOTE: do not zero parent grads here — autograd should accumulate into
+      // existing parent->grad across multiple downstream contributions. The GEMM
+      // calls below always use beta=1.0 to accumulate into parents.
 
       // dC view
       const float* dC = Cn->grad.data();
@@ -393,7 +394,6 @@ Variable matmul(const Variable& A, const Variable& B) {
               const int Kb = k1 - k0;
               if (Mb <= 0 || Kb <= 0) continue;
 
-              bool first_panel = true;
               for (int j0 = 0; j0 < N; j0 += kc) {
                 const int j1 = std::min(j0 + kc, N);
                 const int Nb = j1 - j0;
@@ -403,11 +403,10 @@ Variable matmul(const Variable& A, const Variable& B) {
                 float*       Cblk = dAptr + std::size_t(i0) * ldc_dA + k0; // (Mb x Kb)
 
                 const float alpha = 1.0f;
-                const float beta  = first_panel ? 0.0f : 1.0f;
+                const float beta  = 1.0f; // always accumulate into parent grad
                 // Use GEMM with (TransA=N, TransB=T)
                 ag::ops::sgemm_f32(Mb, Kb, Nb, ag::ops::Trans::N, ag::ops::Trans::T,
                                    Ablk, lda_dC, Bblk, ldb_B, Cblk, ldc_dA, alpha, beta);
-                first_panel = false;
               }
             }
           });
@@ -497,7 +496,6 @@ Variable matmul(const Variable& A, const Variable& B) {
               const int Nb = j1 - j0;
               if (Kb <= 0 || Nb <= 0) continue;
 
-              bool first_panel = true;
               for (int i0 = 0; i0 < M; i0 += kc) {
                 const int i1 = std::min(i0 + kc, M);
                 const int Mb = i1 - i0;
@@ -507,11 +505,10 @@ Variable matmul(const Variable& A, const Variable& B) {
                 float*       Cblk = dBptr + std::size_t(k0) * ldc_dB + j0;   // (Kb x Nb) row-major
 
                 const float alpha = 1.0f;
-                const float beta  = first_panel ? 0.0f : 1.0f;
+                const float beta  = 1.0f; // always accumulate into parent grad
                 // Use GEMM with (TransA=T, TransB=N)
                 ag::ops::sgemm_f32(Kb, Nb, Mb, ag::ops::Trans::T, ag::ops::Trans::N,
                                    Ablk, lda_A, Bblk, ldb_dC, Cblk, ldc_dB, alpha, beta);
-                first_panel = false;
               }
             }
           });
@@ -520,6 +517,73 @@ Variable matmul(const Variable& A, const Variable& B) {
     };
   }
 
+  return C;
+}
+
+// Materialized transpose of the last two dimensions. Forward copies data with
+// last-two dims swapped. Backward accumulates the transposed gradient into the
+// parent variable's grad (does not overwrite existing grad, respects accumulation).
+Variable transpose(const Variable& A) {
+  if (A.shape().size() < 2) throw std::invalid_argument("transpose: rank < 2");
+  const auto Ash = A.shape();
+  const size_t r = Ash.size();
+  const size_t M = Ash[r-2];
+  const size_t K = Ash[r-1];
+
+  // Build output shape by swapping last two dims
+  std::vector<std::size_t> OutSh = Ash;
+  OutSh[r-2] = K;
+  OutSh[r-1] = M;
+
+  const size_t batch_dims = (r >= 2) ? (r - 2) : 0;
+  size_t batch_count = 1;
+  for (size_t i = 0; i < batch_dims; ++i) batch_count *= Ash[i];
+
+  std::vector<float> out(batch_count * M * K, 0.0f);
+  const float* Aptr = A.value().data();
+  float* Outptr = out.data();
+
+  // For each batch, transpose the (M x K) matrix into (K x M)
+  for (size_t b = 0; b < batch_count; ++b) {
+    const size_t Abase = b * (M * K);
+    const size_t Obase = b * (M * K); // same total elems per batch
+    for (size_t i = 0; i < M; ++i) {
+      const size_t Ai = Abase + i * K;
+      for (size_t j = 0; j < K; ++j) {
+        // A[b, i, j] -> Out[b, j, i]
+        Outptr[Obase + j * M + i] = Aptr[Ai + j];
+      }
+    }
+  }
+
+  const bool req = A.requires_grad() && ag::is_grad_enabled();
+  Variable C(out, OutSh, req);
+  if (req) {
+    C.n->parents = { A.n };
+    C.n->backward = [An = A.n, Cn = C.n, Ash, OutSh]() {
+      // Ensure parent grad allocated
+      if (An->grad.size() != An->value.size()) An->grad.assign(An->value.size(), 0.0f);
+      const float* dC = Cn->grad.data();
+
+      const size_t r = Ash.size();
+      const size_t M = Ash[r-2];
+      const size_t K = Ash[r-1];
+      const size_t batch_dims = (r >= 2) ? (r - 2) : 0;
+      size_t batch_count = 1;
+      for (size_t i = 0; i < batch_dims; ++i) batch_count *= Ash[i];
+
+      for (size_t b = 0; b < batch_count; ++b) {
+        const size_t Abase = b * (M * K);
+        const size_t Obase = b * (M * K);
+        for (size_t i = 0; i < M; ++i) {
+          for (size_t j = 0; j < K; ++j) {
+            // dA[b,i,j] += dC[b,j,i]
+            An->grad[Abase + i * K + j] += dC[Obase + j * M + i];
+          }
+        }
+      }
+    };
+  }
   return C;
 }
 

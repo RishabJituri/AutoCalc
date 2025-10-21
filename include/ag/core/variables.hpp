@@ -64,4 +64,13 @@ Variable pow(const Variable& base, const Variable& exponent);
 // Batched matmul: A:[B..., M, K] @ B:[C..., K, N] -> [broadcast(B...,C...), M, N]
 Variable matmul(const Variable& A, const Variable& B);
 
+// Materialized last-two-dimension transpose: returns a new Variable with the
+// last two dimensions swapped and the underlying data copied/reshaped.
+Variable transpose(const Variable& A);
+
+// Materialized slice: copy a contiguous block specified by per-dim begin/end (end exclusive).
+// begin and end must have the same rank as the tensor shape. Slicing currently does not
+// support steps or negative indices; integer indexing is represented by begin[i]==idx and end[i]==idx+1.
+Variable at(const Variable& A, const std::vector<std::size_t>& begin, const std::vector<std::size_t>& end);
+
 } // namespace ag
