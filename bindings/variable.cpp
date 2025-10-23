@@ -31,7 +31,7 @@ struct PyNoGradCtx {
 };
 } // anon
 
-PYBIND11_MODULE(ag, m) {
+PYBIND11_MODULE(_backend, m) {
   // auto m = m.def_submodule("Variable","This is the variable (tensor) class");
   // auto nn = m.def_submodule("nn");
   bind_nn(m);
@@ -48,7 +48,8 @@ PYBIND11_MODULE(ag, m) {
       .def("__exit__", &PyNoGradCtx::exit);
 
   // --- Variable type: expose constructor and useful accessors ---
-  py::class_<ag::Variable>(m, "Variable")
+  auto var_cls = py::class_<ag::Variable>(m, "Variable");
+  var_cls
     .def(py::init<const std::vector<float>&, const std::vector<std::size_t>&, bool>(),
          py::arg("value"), py::arg("shape"), py::arg("requires_grad") = false)
     .def_static("from_numpy", [](py::array_t<float, py::array::c_style | py::array::forcecast> arr, bool requires_grad){
@@ -132,7 +133,156 @@ PYBIND11_MODULE(ag, m) {
       }
       return outv;
     })
-    ;
+    // Add elementwise dunder operators that accept Python scalars/arrays as well
+    .def("__add__", [](const ag::Variable& a, py::object other) {
+      // a + other
+      if (py::isinstance<ag::Variable>(other)) return ag::add(a, other.cast<ag::Variable>());
+      if (py::isinstance<py::float_>(other) || py::isinstance<py::int_>(other)) {
+        double val = py::float_(other);
+        std::size_t N = 1; for (auto d : a.shape()) N *= d;
+        std::vector<float> data(N, static_cast<float>(val));
+        return ag::add(a, ag::Variable(data, a.shape(), a.requires_grad()));
+      }
+      if (py::isinstance<py::array>(other)) {
+        py::array_t<float, py::array::c_style | py::array::forcecast> arr = other.cast<py::array_t<float>>();
+        py::buffer_info info = arr.request();
+        std::vector<float> data((float*)info.ptr, (float*)info.ptr + info.size);
+        std::vector<std::size_t> shape(info.shape.begin(), info.shape.end());
+        return ag::add(a, ag::Variable(data, shape, a.requires_grad()));
+      }
+      throw std::invalid_argument("unsupported operand type for __add__");
+    })
+    .def("__radd__", [](const ag::Variable& a, py::object other) {
+      // other + a
+      if (py::isinstance<ag::Variable>(other)) return ag::add(other.cast<ag::Variable>(), a);
+      if (py::isinstance<py::float_>(other) || py::isinstance<py::int_>(other)) {
+        double val = py::float_(other);
+        std::size_t N = 1; for (auto d : a.shape()) N *= d;
+        std::vector<float> data(N, static_cast<float>(val));
+        return ag::add(ag::Variable(data, a.shape(), a.requires_grad()), a);
+      }
+      if (py::isinstance<py::array>(other)) {
+        py::array_t<float, py::array::c_style | py::array::forcecast> arr = other.cast<py::array_t<float>>();
+        py::buffer_info info = arr.request();
+        std::vector<float> data((float*)info.ptr, (float*)info.ptr + info.size);
+        std::vector<std::size_t> shape(info.shape.begin(), info.shape.end());
+        return ag::add(ag::Variable(data, shape, a.requires_grad()), a);
+      }
+      throw std::invalid_argument("unsupported operand type for __radd__");
+    })
+    .def("__sub__", [](const ag::Variable& a, py::object other) {
+      if (py::isinstance<ag::Variable>(other)) return ag::sub(a, other.cast<ag::Variable>());
+      if (py::isinstance<py::float_>(other) || py::isinstance<py::int_>(other)) {
+        double val = py::float_(other);
+        std::size_t N = 1; for (auto d : a.shape()) N *= d;
+        std::vector<float> data(N, static_cast<float>(val));
+        return ag::sub(a, ag::Variable(data, a.shape(), a.requires_grad()));
+      }
+      if (py::isinstance<py::array>(other)) {
+        py::array_t<float, py::array::c_style | py::array::forcecast> arr = other.cast<py::array_t<float>>();
+        py::buffer_info info = arr.request();
+        std::vector<float> data((float*)info.ptr, (float*)info.ptr + info.size);
+        std::vector<std::size_t> shape(info.shape.begin(), info.shape.end());
+        return ag::sub(a, ag::Variable(data, shape, a.requires_grad()));
+      }
+      throw std::invalid_argument("unsupported operand type for __sub__");
+    })
+    .def("__rsub__", [](const ag::Variable& a, py::object other) {
+      if (py::isinstance<ag::Variable>(other)) return ag::sub(other.cast<ag::Variable>(), a);
+      if (py::isinstance<py::float_>(other) || py::isinstance<py::int_>(other)) {
+        double val = py::float_(other);
+        std::size_t N = 1; for (auto d : a.shape()) N *= d;
+        std::vector<float> data(N, static_cast<float>(val));
+        return ag::sub(ag::Variable(data, a.shape(), a.requires_grad()), a);
+      }
+      if (py::isinstance<py::array>(other)) {
+        py::array_t<float, py::array::c_style | py::array::forcecast> arr = other.cast<py::array_t<float>>();
+        py::buffer_info info = arr.request();
+        std::vector<float> data((float*)info.ptr, (float*)info.ptr + info.size);
+        std::vector<std::size_t> shape(info.shape.begin(), info.shape.end());
+        return ag::sub(ag::Variable(data, shape, a.requires_grad()), a);
+      }
+      throw std::invalid_argument("unsupported operand type for __rsub__");
+    })
+    .def("__mul__", [](const ag::Variable& a, py::object other) {
+      if (py::isinstance<ag::Variable>(other)) return ag::mul(a, other.cast<ag::Variable>());
+      if (py::isinstance<py::float_>(other) || py::isinstance<py::int_>(other)) {
+        double val = py::float_(other);
+        std::size_t N = 1; for (auto d : a.shape()) N *= d;
+        std::vector<float> data(N, static_cast<float>(val));
+        return ag::mul(a, ag::Variable(data, a.shape(), a.requires_grad()));
+      }
+      if (py::isinstance<py::array>(other)) {
+        py::array_t<float, py::array::c_style | py::array::forcecast> arr = other.cast<py::array_t<float>>();
+        py::buffer_info info = arr.request();
+        std::vector<float> data((float*)info.ptr, (float*)info.ptr + info.size);
+        std::vector<std::size_t> shape(info.shape.begin(), info.shape.end());
+        return ag::mul(a, ag::Variable(data, shape, a.requires_grad()));
+      }
+      throw std::invalid_argument("unsupported operand type for __mul__");
+    })
+    .def("__rmul__", [](const ag::Variable& a, py::object other) {
+      if (py::isinstance<ag::Variable>(other)) return ag::mul(other.cast<ag::Variable>(), a);
+      if (py::isinstance<py::float_>(other) || py::isinstance<py::int_>(other)) {
+        double val = py::float_(other);
+        std::size_t N = 1; for (auto d : a.shape()) N *= d;
+        std::vector<float> data(N, static_cast<float>(val));
+        return ag::mul(ag::Variable(data, a.shape(), a.requires_grad()), a);
+      }
+      if (py::isinstance<py::array>(other)) {
+        py::array_t<float, py::array::c_style | py::array::forcecast> arr = other.cast<py::array_t<float>>();
+        py::buffer_info info = arr.request();
+        std::vector<float> data((float*)info.ptr, (float*)info.ptr + info.size);
+        std::vector<std::size_t> shape(info.shape.begin(), info.shape.end());
+        return ag::mul(ag::Variable(data, shape, a.requires_grad()), a);
+      }
+      throw std::invalid_argument("unsupported operand type for __rmul__");
+    })
+    .def("__truediv__", [](const ag::Variable& a, py::object other) {
+      if (py::isinstance<ag::Variable>(other)) return ag::div(a, other.cast<ag::Variable>());
+      if (py::isinstance<py::float_>(other) || py::isinstance<py::int_>(other)) {
+        double val = py::float_(other);
+        std::size_t N = 1; for (auto d : a.shape()) N *= d;
+        std::vector<float> data(N, static_cast<float>(val));
+        return ag::div(a, ag::Variable(data, a.shape(), a.requires_grad()));
+      }
+      if (py::isinstance<py::array>(other)) {
+        py::array_t<float, py::array::c_style | py::array::forcecast> arr = other.cast<py::array_t<float>>();
+        py::buffer_info info = arr.request();
+        std::vector<float> data((float*)info.ptr, (float*)info.ptr + info.size);
+        std::vector<std::size_t> shape(info.shape.begin(), info.shape.end());
+        return ag::div(a, ag::Variable(data, shape, a.requires_grad()));
+      }
+      throw std::invalid_argument("unsupported operand type for __truediv__");
+    })
+    .def("__rtruediv__", [](const ag::Variable& a, py::object other) {
+      if (py::isinstance<ag::Variable>(other)) return ag::div(other.cast<ag::Variable>(), a);
+      if (py::isinstance<py::float_>(other) || py::isinstance<py::int_>(other)) {
+        double val = py::float_(other);
+        std::size_t N = 1; for (auto d : a.shape()) N *= d;
+        std::vector<float> data(N, static_cast<float>(val));
+        return ag::div(ag::Variable(data, a.shape(), a.requires_grad()), a);
+      }
+      if (py::isinstance<py::array>(other)) {
+        py::array_t<float, py::array::c_style | py::array::forcecast> arr = other.cast<py::array_t<float>>();
+        py::buffer_info info = arr.request();
+        std::vector<float> data((float*)info.ptr, (float*)info.ptr + info.size);
+        std::vector<std::size_t> shape(info.shape.begin(), info.shape.end());
+        return ag::div(ag::Variable(data, shape, a.requires_grad()), a);
+      }
+      throw std::invalid_argument("unsupported operand type for __rtruediv__");
+    })
+    .def("__neg__", [](const ag::Variable& a){ return ag::neg(a); })
+    // add convenience reductions as instance methods
+    .def("sum", [](const ag::Variable& a){ return ag::reduce_sum(a); })
+    .def("mean", [](const ag::Variable& a){ return ag::reduce_mean(a); });
+
+  // Help NumPy dispatch to our __r*__ methods by raising array priority
+  try {
+    var_cls.attr("__array_priority__") = py::int_(1000);
+  } catch (const std::exception&) {
+    // ignore if attribute cannot be set for some reason
+  }
 
   // --- Graph helpers ---
   m.def("stop_gradient", &ag::stop_gradient, py::arg("x"));

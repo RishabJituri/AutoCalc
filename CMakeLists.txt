@@ -113,8 +113,15 @@ if(pybind11_FOUND AND Python_FOUND)
   endif()
   # Link the core static library so the module exposes the project symbols
   target_link_libraries(ag_python PRIVATE autocalc_lib pybind11::module ${THREADS_LIB})
-  set_target_properties(ag_python PROPERTIES PREFIX "" OUTPUT_NAME "ag")
-  set_target_properties(ag_python PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/python")
+  # Build the compiled backend as a submodule named _backend inside the `ag` package.
+  # This makes the compiled extension importable as `ag._backend` while the Python shim
+  # remains the package entrypoint.
+  set_target_properties(ag_python PROPERTIES PREFIX "" OUTPUT_NAME "_backend")
+  # Place the compiled extension under build/python/ag so `build/python` added to PYTHONPATH
+  # allows importing `ag` (the Python package) and `ag._backend` (the compiled submodule).
+  set_target_properties(ag_python PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/python/ag")
+  # Ensure directory exists at configure time for some build systems
+  file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/python/ag")
   add_custom_target(build-bindings DEPENDS ag_python)
 else()
   message(STATUS "Python bindings target skipped (pybind11 or Python not available).")

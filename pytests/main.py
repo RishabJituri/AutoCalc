@@ -8,12 +8,20 @@ If no args are provided the tests in the `pytests` folder are executed.
 import sys
 import os
 
-# Ensure the top-level `python/` directory is on sys.path so `import ag` works.
+# Ensure the repo root (containing ag/ package shim) is on sys.path before the
+# compiled extension build dir so Python prefers the shim package. Also add the
+# build/python directory afterward so ag._backend can be imported as a submodule
+# when the extension is built into build/python/ag/_backend.*.so
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
 AG_BUILD_DIR = os.path.join(REPO_ROOT, "python")
+# Insert repo root first so local `ag/` package is found
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+# Then ensure compiled build dir is present so ag._backend can be imported
 if AG_BUILD_DIR not in sys.path:
-    sys.path.insert(0, AG_BUILD_DIR)
+    sys.path.insert(1, AG_BUILD_DIR)
+
 
 def main(argv=None):
     argv = argv if argv is not None else sys.argv[1:]

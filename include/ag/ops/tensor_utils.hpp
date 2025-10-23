@@ -2,7 +2,24 @@
 #include <vector>
 #include <cstddef>
 
-namespace ag { 
+namespace ag {
+
+// Lightweight slice/spec descriptor used by tensor utilities and bindings.
+// Mirrors Python slice semantics: is_index==true means this spec is a single
+// integer index stored in `start`. Otherwise start/stop/step describe the
+// half-open range [start, stop) with step.
+struct Slice {
+  bool is_index = false;
+  long long start = 0;
+  long long stop = 0;
+  long long step = 1;
+};
+
+class Variable; // forward
+
+// High-level slicing API that accepts a per-dimension Slice spec.
+Variable at(const Variable& X, const std::vector<Slice>& spec);
+
 namespace detail {
 
 // shape helpers

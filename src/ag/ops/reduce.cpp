@@ -181,12 +181,28 @@ Variable broadcast_to(const Variable& X, const std::vector<std::size_t>& out_sha
   // Validate broadcast compatibility (NumPy right-aligned)
   const auto& in_shape = X.n->shape;
   const std::size_t ra = in_shape.size(), rb = out_shape.size();
+  bool compatible = true;
   for (std::size_t i = 0; i < rb; ++i) {
     const std::size_t ad = (i < rb - ra) ? 1 : in_shape[i - (rb - ra)];
     const std::size_t bd = out_shape[i];
-    if (ad != bd && ad != 1)
-      throw std::invalid_argument("broadcast_to: incompatible shapes");
+    if (ad != bd && ad != 1) { compatible = false; break; }
   }
+
+  bool left_align = false;
+  if (!compatible) {
+    // Try alternate alignment: left-align input and allow appending singleton dims
+    bool ok = true;
+    for (std::size_t i = 0; i < rb; ++i) {
+      const std::size_t ad = (i < ra) ? in_shape[i] : 1;
+      const std::size_t bd = out_shape[i];
+      if (ad != bd && ad != 1) { ok = false; break; }
+    }
+    if (ok) {
+      left_align = true;
+      compatible = true;
+    }
+  }
+  if (!compatible) throw std::invalid_argument("broadcast_to: incompatible shapes");
 
   const auto outN = numel(out_shape);
   auto out = std::make_shared<Node>();
@@ -207,10 +223,18 @@ Variable broadcast_to(const Variable& X, const std::vector<std::size_t>& out_sha
       auto oidx = unravel_index(lin, out_shape);
       iidx.clear(); iidx.reserve(in_shape.size());
       const std::size_t rb2 = out_shape.size(), ra2 = in_shape.size();
-      for (std::size_t i = 0; i < ra2; ++i) {
-        std::size_t od = oidx[i + (rb2 - ra2)];
-        std::size_t ad = in_shape[i];
-        iidx.push_back(ad == 1 ? 0 : od);
+      if (!left_align) {
+        for (std::size_t i = 0; i < ra2; ++i) {
+          std::size_t od = oidx[i + (rb2 - ra2)];
+          std::size_t ad = in_shape[i];
+          iidx.push_back(ad == 1 ? 0 : od);
+        }
+      } else {
+        for (std::size_t i = 0; i < ra2; ++i) {
+          std::size_t od = oidx[i];
+          std::size_t ad = in_shape[i];
+          iidx.push_back(ad == 1 ? 0 : od);
+        }
       }
       auto ilin = ravel_index(iidx, istrides);
       out->value[lin] = X.n->value[ilin];
@@ -218,7 +242,7 @@ Variable broadcast_to(const Variable& X, const std::vector<std::size_t>& out_sha
   });
 
   std::weak_ptr<Node> ow = out, xw = X.n;
-  out->backward = [ow, xw, out_shape, in_shape]() {
+  out->backward = [ow, xw, out_shape, in_shape, left_align]() {
     auto o = ow.lock(); if (!o) return; auto x = xw.lock();
     if (!x || !x->requires_grad) return;
 
@@ -231,10 +255,18 @@ Variable broadcast_to(const Variable& X, const std::vector<std::size_t>& out_sha
         auto oidx = unravel_index(lin, out_shape);
         iidx.clear(); iidx.reserve(in_shape.size());
         const std::size_t rb2 = out_shape.size(), ra2 = in_shape.size();
-        for (std::size_t i = 0; i < ra2; ++i) {
-          std::size_t od = oidx[i + (rb2 - ra2)];
-          std::size_t ad = in_shape[i];
-          iidx.push_back(ad == 1 ? 0 : od);
+        if (!left_align) {
+          for (std::size_t i = 0; i < ra2; ++i) {
+            std::size_t od = oidx[i + (rb2 - ra2)];
+            std::size_t ad = in_shape[i];
+            iidx.push_back(ad == 1 ? 0 : od);
+          }
+        } else {
+          for (std::size_t i = 0; i < ra2; ++i) {
+            std::size_t od = oidx[i];
+            std::size_t ad = in_shape[i];
+            iidx.push_back(ad == 1 ? 0 : od);
+          }
         }
         auto ilin = ravel_index(iidx, istrides);
         // accumulation into x->grad may contend if multiple out positions map to same ilin,

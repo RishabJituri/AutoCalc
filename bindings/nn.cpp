@@ -13,7 +13,8 @@ void bind_nn(py::module_ &m) {
     .def("parameters", [](ag::nn::Module& self) -> std::vector<ag::Variable*> { return self.parameters(); },
          py::return_value_policy::reference_internal)
     .def("zero_grad", [](ag::nn::Module& self){ self.zero_grad(); })
-    .def("train", [](ag::nn::Module& self, bool mode){ if(mode) self.train(); else self.eval(); });
+    .def("train", [](ag::nn::Module& self, bool mode){ if(mode) self.train(); else self.eval(); })
+    .def("__call__", [](ag::nn::Module& self, const ag::Variable& x){ return self.forward(x); });
 
   // Linear: Linear(in_features, out_features, bias=true, init_scale=0.02, seed=0xC0FFEE)
   py::class_<ag::nn::Linear, ag::nn::Module, std::shared_ptr<ag::nn::Linear>>(nn, "Linear")
@@ -41,9 +42,9 @@ void bind_nn(py::module_ &m) {
        py::arg("dilation_h")=1, py::arg("dilation_w")=1, py::arg("bias")=true, py::arg("init_scale")=0.02f, py::arg("seed")=0xC0FFEEULL)
     .def("forward", [](ag::nn::Conv2d& self, const ag::Variable& x){ return self.forward(x); });
 
-  // Sequential
+  // Sequential (do not expose default constructor to Python for now)
   py::class_<ag::nn::Sequential, ag::nn::Module, std::shared_ptr<ag::nn::Sequential>>(nn, "Sequential")
-    .def(py::init<>())
+    // Note: constructor intentionally not exposed; create instances via C++ or other factories
     .def("append", [](ag::nn::Sequential& s, std::shared_ptr<ag::nn::Module> m){ s.push(std::move(m)); })
     .def("forward", [](ag::nn::Sequential& s, const ag::Variable& x){ return s.forward(x); });
 
@@ -83,4 +84,11 @@ void bind_nn(py::module_ &m) {
   py::class_<ag::nn::SGD>(optim, "SGD")
     .def(py::init<float, float, bool, float>(), py::arg("lr")=0.1f, py::arg("momentum")=0.0f, py::arg("nesterov")=false, py::arg("weight_decay")=0.0f)
     .def("step", [](ag::nn::SGD& self, ag::nn::Module& m){ self.step(m); });
+
+  // Re-export optim.SGD as nn.SGD for convenience
+  try {
+    nn.attr("SGD") = optim.attr("SGD");
+  } catch (const std::exception&) {
+    // ignore if attr copy fails
+  }
 }

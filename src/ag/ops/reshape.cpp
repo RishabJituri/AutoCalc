@@ -17,7 +17,12 @@ Variable flatten(const Variable& X, std::size_t start_dim) {
   for (std::size_t i = start_dim; i < rank; ++i) suffix *= shp[i];
 
   auto out = std::make_shared<Node>();
-  out->shape = {prefix, suffix};
+  // Build output shape matching NumPy: keep dimensions before start_dim, collapse the rest
+  std::vector<std::size_t> out_shape;
+  out_shape.reserve((start_dim > 0 ? start_dim : 0) + 1);
+  for (std::size_t i = 0; i < start_dim; ++i) out_shape.push_back(shp[i]);
+  out_shape.push_back(suffix);
+  out->shape = out_shape;
 
   const std::size_t N = prefix * suffix;
   out->value.resize(N);
