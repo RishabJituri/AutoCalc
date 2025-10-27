@@ -18,12 +18,26 @@ void SGD::step(ag::nn::Module& m) {
   std::vector<Block> blocks;
   blocks.reserve(params.size());
 
-  // Single-threaded: ensure velocity entries and build block views
+  // Reserve capacity in the velocity map to avoid rehashing while we take pointers
+  velocity.reserve(params.size());
+
+  // First pass: ensure velocity entries and grad buffers exist (no taking pointers yet)
   for (ag::Variable* p : params) {
+    if (!p || !p->n) continue;
+    ag::Node* key = p->n.get();
+    const std::size_t n = p->n->value.size();
+    auto &vel = velocity[key];
+    if (vel.size() != n) vel.assign(n, 0.0f);
+    // Ensure grad buffer exists
+    if (p->n->grad.size() != n) p->n->grad.assign(n, 0.0f);
+  }
+
+  // Second pass: now take stable data() pointers into blocks
+  for (ag::Variable* p : params) {
+    if (!p || !p->n) continue;
     ag::Node* key = p->n.get();
     auto& vel = velocity[key];
     const std::size_t n = p->n->value.size();
-    if (vel.size() != n) vel.assign(n, 0.0f);
     blocks.push_back(Block{ p->n->value.data(), p->n->grad.data(), vel.data(), n });
   }
 

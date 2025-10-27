@@ -134,15 +134,24 @@ static std::vector<std::size_t> to_index_vec(const ag::Variable& ybat) {
     return out;
 }
 
-// --------- Model (no Module inheritance; per-layer optimization like tests) ---------
-struct SimpleCNN {
+// --------- Model (Module-based; register submodules so optimizer can step(net)) ---------
+struct SimpleCNN : public ag::nn::Module {
+    // Submodules remain public for ad-hoc access/debug prints
     ag::nn::Conv2d   conv1{1, 8,  {3,3}, {1,1}, {1,1}};
     ag::nn::Conv2d   conv2{8, 16, {3,3}, {1,1}, {1,1}};
     ag::nn::MaxPool2d pool{2,2};
     ag::nn::Linear   fc1{16*7*7, 64};
     ag::nn::Linear   fc2{64, 10};
 
-    ag::Variable forward(const ag::Variable& x) {
+    // Register submodules so Module::parameters()/named_parameters() recurse into them
+    SimpleCNN() {
+      register_module("conv1", conv1);
+      register_module("conv2", conv2);
+      register_module("fc1", fc1);
+      register_module("fc2", fc2);
+    }
+
+    ag::Variable forward(const ag::Variable& x) override {
         auto h = ag::relu(conv1.forward(x));
         h = pool.forward(h);
         h = ag::relu(conv2.forward(h));
@@ -152,10 +161,10 @@ struct SimpleCNN {
         return fc2.forward(h);
     }
 
-    // mode passthroughs so caller can do net.train()/net.eval()
-    void train() { conv1.train(); conv2.train(); fc1.train(); /*pool has no state*/ }
-    void eval()  { conv1.eval();  conv2.eval();  fc1.eval();  }
-    void zero_grad() { conv1.zero_grad(); conv2.zero_grad(); fc1.zero_grad(); fc2.zero_grad(); }
+    // No local parameters — return empty vector. Parameters live in registered submodules.
+    std::vector<ag::Variable*> _parameters() override {
+      return {};
+    }
 };
 
 int main(int argc, char** argv) {
@@ -211,11 +220,39 @@ int main(int argc, char** argv) {
             auto loss    = ag::nn::cross_entropy(logits, targets);
             loss.backward();
 
-            // per-layer updates (matches your SGD test)
-            opt.step(net.conv1);
-            opt.step(net.conv2);
-            opt.step(net.fc1);
-            opt.step(net.fc2);
+            // Debug: print param mean and grad norm for conv1 and fc2 on first 3 steps
+            if (tstep < 3) {
+                auto print_stats = [&](const char* name, auto& layer) {
+                    auto params = layer.parameters();
+                    for (std::size_t pi = 0; pi < params.size(); ++pi) {
+                        const auto& val = params[pi]->value();
+                        const auto& grad = params[pi]->grad();
+                        float mean = 0.0f; for (float v : val) mean += v; mean /= float(val.size());
+                        float gnorm = 0.0f; for (float g : grad) gnorm += g*g; gnorm = std::sqrt(gnorm);
+                        std::cout << "[dbg] " << name << " param" << pi << " mean=" << mean << " grad_norm=" << gnorm << "\n";
+                    }
+                };
+                print_stats("conv1", net.conv1);
+                print_stats("fc2", net.fc2);
+            }
+
+            // single optimizer step for the entire network
+            opt.step(net);
+
+            // Debug: after step, print updated param mean for first 3 steps
+            if (tstep < 3) {
+                auto print_mean = [&](const char* name, auto& layer) {
+                    auto params = layer.parameters();
+                    for (std::size_t pi = 0; pi < params.size(); ++pi) {
+                        const auto& val = params[pi]->value();
+                        float mean = 0.0f; for (float v : val) mean += v; mean /= float(val.size());
+                        std::cout << "[dbg] after step " << name << " param" << pi << " mean=" << mean << "\n";
+                    }
+                };
+                print_mean("conv1", net.conv1);
+                print_mean("fc2", net.fc2);
+            }
+
             net.zero_grad();
 
             // update running average weighted by batch size

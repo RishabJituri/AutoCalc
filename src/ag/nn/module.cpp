@@ -81,8 +81,14 @@ std::vector<std::pair<std::string, Variable*>> Module::named_parameters(const st
 }
 
 void Module::zero_grad() {
-  for (auto& sm : submodules_) if (sm) sm->zero_grad();
-  for (auto &p : _parameters()) p->n->grad.assign(p->n->value.size(), 0.0f);
+  // Collect full set of parameters (deduped) and zero their grad buffers.
+  auto params = parameters();
+  for (auto* p : params) {
+    if (!p || !p->n) continue;
+    const std::size_t n = p->n->value.size();
+    if (p->n->grad.size() != n) p->n->grad.assign(n, 0.0f);
+    else std::fill(p->n->grad.begin(), p->n->grad.end(), 0.0f);
+  }
 }
 
 void Module::train() {
