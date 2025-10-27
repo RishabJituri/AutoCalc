@@ -101,3 +101,27 @@
 //     ASSERT_TRUE(ms.size() == (std::size_t)N);
 //     for (int i=0;i<N;++i) ASSERT_TRUE(ms.count(i) == 1);
 // }
+
+// TEST("data/dataloader/rewind_changes_shuffle") {
+//     InMemoryDataset ds;
+//     const int N = 20;
+//     for (int i=0;i<N;++i) ds.push_back(make_scalar_pair(i, 2*i));
+//     DataLoaderOptions opts;
+//     opts.batch_size = 4; opts.shuffle = true; opts.seed = 12345ull;
+//     DataLoader loader(ds, opts);
+//     // consume one epoch
+//     std::vector<float> epoch1;
+//     while (loader.has_next()) { auto b = loader.next(); for (float v : b.x.value()) epoch1.push_back(v); }
+//     // rewind and consume again — order should differ from epoch1
+//     loader.rewind();
+//     std::vector<float> epoch2;
+//     while (loader.has_next()) { auto b = loader.next(); for (float v : b.x.value()) epoch2.push_back(v); }
+//     bool same = (epoch1 == epoch2);
+//     ASSERT_TRUE(!same);
+// }
+
+// TEST("data/dataloader/invalid_batch_size_throws") {
+//     InMemoryDataset ds; ds.push_back(make_scalar_pair(0,0));
+//     DataLoaderOptions opts; opts.batch_size = 0; opts.shuffle=false;
+//     ASSERT_THROWS(DataLoader(ds, opts));
+// }

@@ -69,19 +69,29 @@ class DataLoader {
 public:
   DataLoader(const Dataset& dataset, DataLoaderOptions opts = {})
   : ds_(dataset), opts_(opts) {
+    // Sanity-check batch size
+    if (opts_.batch_size < 1) throw std::invalid_argument("DataLoader: batch_size must be >= 1");
     reset();
   }
 
   void reset() {
-    // Build indices 0..size-1
+    // Build indices 0..size-1 and optionally shuffle.
     const std::size_t N = ds_.size();
     indices_.resize(N);
     for (std::size_t i = 0; i < N; ++i) indices_[i] = i;
     if (opts_.shuffle) {
-      std::mt19937_64 rng(opts_.seed);
+      // Mix epoch into seed so each reset(epoch++) produces a different permutation.
+      const unsigned long long seed = opts_.seed + static_cast<unsigned long long>(epoch_);
+      std::mt19937_64 rng(seed);
       std::shuffle(indices_.begin(), indices_.end(), rng);
     }
     cursor_ = 0;
+  }
+
+  // convenience rewind -> reset (increments epoch so shuffles change)
+  void rewind() {
+    ++epoch_;
+    reset();
   }
 
   std::size_t size() const { return ds_.size(); }
@@ -104,11 +114,17 @@ public:
       // Should not happen due to has_next(), but guard anyway
       return Batch{ ag::Variable({}, {0}, false), ag::Variable({}, {0}, false), 0 };
     }
+    // Collect indices first, then fetch samples. Advance cursor_ only after successful fetches.
+    std::vector<std::size_t> take_idx; take_idx.reserve(take);
+    for (std::size_t k = 0; k < take; ++k) take_idx.push_back(indices_[cursor_ + k]);
+
     std::vector<Example> buf; buf.reserve(take);
-    for (std::size_t k = 0; k < take; ++k) {
-      auto idx = indices_[cursor_++];
+    for (auto idx : take_idx) {
       buf.push_back(ds_.get(idx));
     }
+
+    // All fetches succeeded; advance cursor
+    cursor_ += take;
     return collate(buf);
   }
 
@@ -118,6 +134,8 @@ public:
 private:
   const Dataset& ds_;
   DataLoaderOptions opts_{};
+  // epoch counter used to vary shuffle seed each rewind/reset cycle
+  std::size_t epoch_ = 0;
   std::vector<std::size_t> indices_;
   std::size_t cursor_ = 0;
 };
