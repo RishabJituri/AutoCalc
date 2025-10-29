@@ -147,21 +147,3 @@ Use `InMemoryDataset` for easy experiments and `DataLoaderOptions` to configure 
 - `experiments/` — small Python experiments and scripts used during development.
 
 Recorded runs and metrics are stored in `results_mnist.txt` and `results_resnet.txt`.
-
----
-
-## Contributing
-
-- Add new ops under `include/ag/ops` and `src/ag/ops` and follow the patterns used by existing ops.
-- Add new layers under `include/ag/nn/layers` and `src/ag/nn/layers`.
-- Add tests to `tests/` and run `./bin/tests` frequently.
-
----
-
-## License
-
-Add your project license here (e.g. MIT, Apache-2.0). Update this file to reflect the chosen license.
-
----
-
-If you want this file to include full API signatures (all public methods/types), or want a separate `README_API.md` focused purely on reference, say which format you prefer and I will add it.
