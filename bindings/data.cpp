@@ -12,9 +12,18 @@
 
 namespace py = pybind11;
 
-namespace ag_bindings {
-
 namespace {
+
+// Python trampoline for ag::data::Dataset so Python subclasses can override
+struct PyDataset : public ag::data::Dataset {
+  using ag::data::Dataset::Dataset;
+  std::size_t size() const override {
+    PYBIND11_OVERLOAD_PURE(std::size_t, ag::data::Dataset, size);
+  }
+  ag::data::Example get(std::size_t idx) const override {
+    PYBIND11_OVERLOAD_PURE(ag::data::Example, ag::data::Dataset, get, idx);
+  }
+};
 
 // Python iterator wrapper around DataLoader::next()
 struct DataLoaderIter {
@@ -38,6 +47,8 @@ struct DataLoaderIter {
 };
 
 } // anon
+
+namespace ag_bindings {
 
 void bind_data(py::module_& root) {
   py::module_ m = root.def_submodule("data", "Datasets, dataloaders, and transforms");
@@ -64,8 +75,8 @@ void bind_data(py::module_& root) {
       return c(e);
     });
 
-  // Dataset base (abstract)
-  py::class_<ag::data::Dataset, std::shared_ptr<ag::data::Dataset>>(m, "Dataset")
+  // Dataset base (abstract) - use trampoline so Python subclasses can override
+  py::class_<ag::data::Dataset, PyDataset, std::shared_ptr<ag::data::Dataset>>(m, "Dataset")
     .def("size", &ag::data::Dataset::size)
     .def("__len__", &ag::data::Dataset::size)
     .def("get", &ag::data::Dataset::get, py::arg("index"))
@@ -86,9 +97,9 @@ void bind_data(py::module_& root) {
     .def_readwrite("drop_last",  &ag::data::DataLoaderOptions::drop_last)
     .def_readwrite("seed",       &ag::data::DataLoaderOptions::seed);
 
-  // DataLoader (own a Dataset& and options)
+  // DataLoader (own a Dataset shared_ptr and options)
   py::class_<ag::data::DataLoader, std::shared_ptr<ag::data::DataLoader>>(m, "DataLoader")
-    .def(py::init<const ag::data::Dataset&, ag::data::DataLoaderOptions>(),
+    .def(py::init<std::shared_ptr<ag::data::Dataset>, ag::data::DataLoaderOptions>(),
          py::arg("dataset"), py::arg("options"))
     .def("reset",   &ag::data::DataLoader::reset)
     .def("indices", &ag::data::DataLoader::indices, py::return_value_policy::reference_internal)

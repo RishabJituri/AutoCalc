@@ -67,8 +67,9 @@ inline Batch collate(const std::vector<Example>& samples) {
 
 class DataLoader {
 public:
-  DataLoader(const Dataset& dataset, DataLoaderOptions opts = {})
-  : ds_(dataset), opts_(opts) {
+  // Accept a shared_ptr<Dataset> so we can hold Python-owned datasets safely
+  DataLoader(std::shared_ptr<Dataset> dataset, DataLoaderOptions opts = {})
+  : ds_(std::move(dataset)), opts_(opts) {
     // Sanity-check batch size
     if (opts_.batch_size < 1) throw std::invalid_argument("DataLoader: batch_size must be >= 1");
     reset();
@@ -76,7 +77,7 @@ public:
 
   void reset() {
     // Build indices 0..size-1 and optionally shuffle.
-    const std::size_t N = ds_.size();
+    const std::size_t N = ds_->size();
     indices_.resize(N);
     for (std::size_t i = 0; i < N; ++i) indices_[i] = i;
     if (opts_.shuffle) {
@@ -94,7 +95,7 @@ public:
     reset();
   }
 
-  std::size_t size() const { return ds_.size(); }
+  std::size_t size() const { return ds_->size(); }
   std::size_t remaining() const { return (cursor_ < indices_.size()) ? (indices_.size() - cursor_) : 0; }
 
   bool has_next() const {
@@ -107,7 +108,7 @@ public:
   }
 
   Batch next() {
-    const std::size_t N = ds_.size();
+    const std::size_t N = ds_->size();
     if (!has_next()) return Batch{ ag::Variable({}, {0}, false), ag::Variable({}, {0}, false), 0 };
     std::size_t take = std::min<std::size_t>(opts_.batch_size, indices_.size() - cursor_);
     if (opts_.drop_last && take < opts_.batch_size) {
@@ -120,7 +121,7 @@ public:
 
     std::vector<Example> buf; buf.reserve(take);
     for (auto idx : take_idx) {
-      buf.push_back(ds_.get(idx));
+      buf.push_back(ds_->get(idx));
     }
 
     // All fetches succeeded; advance cursor
@@ -132,7 +133,7 @@ public:
   const DataLoaderOptions& options() const { return opts_; }
 
 private:
-  const Dataset& ds_;
+  std::shared_ptr<Dataset> ds_;
   DataLoaderOptions opts_{};
   // epoch counter used to vary shuffle seed each rewind/reset cycle
   std::size_t epoch_ = 0;

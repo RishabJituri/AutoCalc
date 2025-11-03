@@ -178,11 +178,29 @@ endif()
 separate_arguments(_fast_cxx NATIVE_COMMAND "${AUTO_FAST_CXXFLAGS}")
 separate_arguments(_fast_ld  NATIVE_COMMAND "${AUTO_FAST_LDFLAGS}")
 
+# Option to force fast-only flags for demos and core library (no sanitizers, no debug)
+option(AUTOCALC_FORCE_FAST "Enforce fast compile flags (no sanitizers) for fast targets and core library" OFF)
+if(AUTOCALC_FORCE_FAST)
+  message(STATUS "AUTOCALC_FORCE_FAST=ON: forcing fast flags and disabling sanitizers for core/fast targets")
+  # Compose the set of flags we want for fast targets and the core library
+  set(_FORCE_FAST_FLAGS ${AUTO_WARN_FLAGS} -O3 ${AUTO_COMMON_FLAGS} ${_fast_cxx} -g0 -fno-sanitize=address -fno-sanitize=undefined)
+  set(_FORCE_FAST_LDFLAGS ${_fast_ld})
+  # If the core static lib exists (pybind11 path), force-recompile it with fast flags
+  if(TARGET autocalc_lib)
+    target_compile_options(autocalc_lib PRIVATE ${_FORCE_FAST_FLAGS})
+    target_link_options(autocalc_lib PRIVATE ${_FORCE_FAST_LDFLAGS})
+  endif()
+  # Ensure any fast_* targets created below will also use the same flags by exposing a variable
+  set(AUTOCALC__FORCE_FAST_FLAGS "${_FORCE_FAST_FLAGS}")
+  set(AUTOCALC__FORCE_FAST_LDFLAGS "${_FORCE_FAST_LDFLAGS}")
+endif()
+
 # MNIST
 if(EXISTS ${CMAKE_SOURCE_DIR}/${MNIST_EXAMPLE})
   add_executable(fast_mnist ${MNIST_EXAMPLE} ${SRC_FILES})
-  target_compile_options(fast_mnist PRIVATE ${AUTO_WARN_FLAGS} -DNDEBUG -O3 ${AUTO_COMMON_FLAGS} ${_fast_cxx})
-  target_link_options(fast_mnist PRIVATE ${_fast_ld})
+  # Force only fast flags for this target, disable sanitizers and debug info
+  target_compile_options(fast_mnist PRIVATE ${AUTO_WARN_FLAGS} -DNDEBUG -O3 ${AUTO_COMMON_FLAGS} ${_fast_cxx} -g0 -fno-sanitize=address -fno-sanitize=undefined)
+  target_link_options(fast_mnist PRIVATE ${_fast_ld} -fno-sanitize=address -fno-sanitize=undefined)
   target_link_libraries(fast_mnist PRIVATE ${THREADS_LIB})
   place_exe(fast_mnist "fast")
   add_custom_target(run-fast-mnist
@@ -195,8 +213,8 @@ endif()
 # ResNet
 if(EXISTS ${CMAKE_SOURCE_DIR}/${RESNET_EXAMPLE})
   add_executable(fast_resnet ${RESNET_EXAMPLE} ${SRC_FILES})
-  target_compile_options(fast_resnet PRIVATE ${AUTO_WARN_FLAGS} -DNDEBUG -O3 ${AUTO_COMMON_FLAGS} ${_fast_cxx})
-  target_link_options(fast_resnet PRIVATE ${_fast_ld})
+  target_compile_options(fast_resnet PRIVATE ${AUTO_WARN_FLAGS} -DNDEBUG -O3 ${AUTO_COMMON_FLAGS} ${_fast_cxx} -g0 -fno-sanitize=address -fno-sanitize=undefined)
+  target_link_options(fast_resnet PRIVATE ${_fast_ld} -fno-sanitize=address -fno-sanitize=undefined)
   target_link_libraries(fast_resnet PRIVATE ${THREADS_LIB})
   place_exe(fast_resnet "fast")
   add_custom_target(run-fast-resnet
@@ -209,8 +227,8 @@ endif()
 # LSTM
 if(EXISTS ${CMAKE_SOURCE_DIR}/${LSTM_EXAMPLE})
   add_executable(fast_lstm ${LSTM_EXAMPLE} ${SRC_FILES})
-  target_compile_options(fast_lstm PRIVATE ${AUTO_WARN_FLAGS} -DNDEBUG -O3 ${AUTO_COMMON_FLAGS} ${_fast_cxx})
-  target_link_options(fast_lstm PRIVATE ${_fast_ld})
+  target_compile_options(fast_lstm PRIVATE ${AUTO_WARN_FLAGS} -DNDEBUG -O3 ${AUTO_COMMON_FLAGS} ${_fast_cxx} -g0 -fno-sanitize=address -fno-sanitize=undefined)
+  target_link_options(fast_lstm PRIVATE ${_fast_ld} -fno-sanitize=address -fno-sanitize=undefined)
   target_link_libraries(fast_lstm PRIVATE ${THREADS_LIB})
   place_exe(fast_lstm "fast")
   add_custom_target(run-fast-lstm

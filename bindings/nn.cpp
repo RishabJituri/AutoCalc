@@ -8,13 +8,146 @@ namespace py = pybind11;
 void bind_nn(py::module_ &m) {
   auto nn = m.def_submodule("nn", "Neural network modules and layers");
 
-  // Base Module (shared ptr)
-  py::class_<ag::nn::Module, std::shared_ptr<ag::nn::Module>>(nn, "Module")
-    .def("parameters", [](ag::nn::Module& self) -> std::vector<ag::Variable*> { return self.parameters(); },
-         py::return_value_policy::reference_internal)
+  // Trampoline to allow Python subclasses to override virtual forward() and provide _parameters
+  struct PyModule : ag::nn::Module {
+    using ag::nn::Module::Module;
+    ag::Variable forward(const ag::Variable& x) override {
+      PYBIND11_OVERLOAD_PURE(ag::Variable, ag::nn::Module, forward, x);
+    }
+    // default _parameters() returns empty list; Python subclasses may override if desired
+    std::vector<ag::Variable*> _parameters() override { return {}; }
+  };
+
+  // Base Module (shared ptr) — allow Python subclassing via PyModule
+  py::class_<ag::nn::Module, PyModule, std::shared_ptr<ag::nn::Module>>(nn, "Module")
+    .def(py::init<>())
+    // Python-aware parameters(): merge C++-registered params with any parameters found on the Python
+    // instance __dict__ (including parameters from Python-defined child modules). This makes attribute
+    // assignment from Python subclasses robust even when the C++ register hooks cannot obtain a
+    // shared_ptr to the assigned Python object.
+    .def("parameters", [](py::object self_obj) {
+      std::vector<ag::Variable*> out;
+      // Use builtins.id to track visited Python objects and avoid infinite recursion
+      py::object builtins = py::module_::import("builtins");
+      py::set visited;
+
+      // Recursive lambda (C++14 compatible via std::function)
+      std::function<void(py::object)> collect;
+      collect = [&](py::object obj) {
+        try {
+          py::object oid = builtins.attr("id")(obj);
+          if (visited.contains(oid)) return; // already processed
+          visited.add(oid);
+        } catch (...) {
+          // if id() fails for some reason, continue without visited guard
+        }
+
+        // If obj is a backend Variable, add it
+        try {
+          if (py::isinstance<ag::Variable>(obj)) {
+            ag::Variable &v = obj.cast<ag::Variable&>();
+            out.push_back(&v);
+            return;
+          }
+        } catch (...) {}
+
+        // If obj is a module-like C++ Module, prefer native parameters() to avoid Python recursion
+        try {
+          if (py::isinstance<ag::nn::Module>(obj)) {
+            try {
+              // Attempt to cast to C++ reference; this will succeed for objects with a C++ holder
+              ag::nn::Module &mcpp = obj.cast<ag::nn::Module&>();
+              auto native = mcpp.parameters();
+              out.insert(out.end(), native.begin(), native.end());
+              return;
+            } catch (...) {
+              // Fall through to python-side exploration for pure-Python Module objects
+            }
+          }
+        } catch (...) {}
+
+        // Inspect Python __dict__ for Variables or child Modules and recurse
+        try {
+          if (py::hasattr(obj, "__dict__")) {
+            py::dict d = obj.attr("__dict__");
+            for (auto item : d) {
+              py::handle h = item.second;
+              py::object val = py::reinterpret_borrow<py::object>(h);
+              try { collect(val); } catch (...) { /* ignore individual failures */ }
+            }
+          }
+        } catch (...) {}
+      };
+
+      // Start with self: prefer native C++ params then fallback to Python inspection.
+      try {
+        // Try C++ native first
+        ag::nn::Module &self_cpp = self_obj.cast<ag::nn::Module&>();
+        try { auto native = self_cpp.parameters(); out.insert(out.end(), native.begin(), native.end()); } catch(...){}
+      } catch(...){}
+
+      // Then recursively collect from the Python instance (this will also visit pythonic children)
+      collect(self_obj);
+
+      // Deduplicate pointers while preserving order
+      std::vector<ag::Variable*> uniq;
+      for (auto p : out) {
+        if (!p) continue;
+        if (std::find(uniq.begin(), uniq.end(), p) == uniq.end()) uniq.push_back(p);
+      }
+      return uniq;
+    }, py::return_value_policy::reference_internal)
+    .def("named_parameters", [](ag::nn::Module& self, const std::string& prefix){ return self.named_parameters(prefix); })
     .def("zero_grad", [](ag::nn::Module& self){ self.zero_grad(); })
     .def("train", [](ag::nn::Module& self, bool mode){ if(mode) self.train(); else self.eval(); })
-    .def("__call__", [](ag::nn::Module& self, const ag::Variable& x){ return self.forward(x); });
+    .def("__call__", [](ag::nn::Module& self, const ag::Variable& x){ return self.forward(x); })
+    // explicit register helpers (useful from Python)
+    .def("register_module", [](ag::nn::Module& self, std::shared_ptr<ag::nn::Module> m){ self.register_module(m); })
+    .def("register_module", [](ag::nn::Module& self, const std::string& name, std::shared_ptr<ag::nn::Module> m){ self.register_module(name, m); })
+    .def("register_parameter", [](ag::nn::Module& self, const std::string& name, ag::Variable& v){ self.register_parameter(name, v); })
+    // PyTorch-like __setattr__: operate on the Python instance and perform best-effort registration.
+    .def("__setattr__", [](py::object self_obj, const std::string& name, py::object obj){
+      try {
+        // Ignore assigning Python modules
+        if (py::isinstance<py::module_>(obj)) {
+          py::dict d = self_obj.attr("__dict__");
+          d[py::str(name)] = obj;
+          return;
+        }
+
+        if (py::isinstance<ag::nn::Module>(obj)) {
+          // Try to obtain a std::shared_ptr for the assigned module and register it with the C++ Module
+          try {
+            auto child_sp = obj.cast<std::shared_ptr<ag::nn::Module>>();
+            ag::nn::Module &self_cpp = self_obj.cast<ag::nn::Module&>();
+            self_cpp.register_module(name, child_sp);
+          } catch (...) {
+            // If cast to shared_ptr fails (e.g., pure-Python subclass without a C++ holder),
+            // fall back to storing in __dict__ and rely on parameters() to discover parameters.
+          }
+          py::dict d = self_obj.attr("__dict__");
+          d[py::str(name)] = obj;
+          return;
+        }
+
+        if (py::isinstance<ag::Variable>(obj)) {
+          try {
+            ag::Variable &v = obj.cast<ag::Variable&>();
+            ag::nn::Module &self_cpp = self_obj.cast<ag::nn::Module&>();
+            // attempt to register parameter on the C++ side; ignore failures and fall back to __dict__ storage
+            try { self_cpp.register_parameter(name, v); } catch(...) {}
+          } catch (...) {}
+          py::dict d = self_obj.attr("__dict__");
+          d[py::str(name)] = obj;
+          return;
+        }
+      } catch (...) {
+        // fall back to normal attribute set
+      }
+      // default store in __dict__ to avoid infinite recursion
+      py::dict d = self_obj.attr("__dict__");
+      d[py::str(name)] = obj;
+    });
 
   // Linear: Linear(in_features, out_features, bias=true, init_scale=0.02, seed=0xC0FFEE)
   py::class_<ag::nn::Linear, ag::nn::Module, std::shared_ptr<ag::nn::Linear>>(nn, "Linear")

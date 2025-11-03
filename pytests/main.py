@@ -22,6 +22,16 @@ if REPO_ROOT not in sys.path:
 if AG_BUILD_DIR not in sys.path:
     sys.path.insert(1, AG_BUILD_DIR)
 
+# Also export PYTHONPATH so any subprocesses or pytest plugins inherit the same
+# import order: repo root (shim) first, then compiled build dir (ag._backend).
+old_py = os.environ.get('PYTHONPATH', '')
+new_paths = [REPO_ROOT, AG_BUILD_DIR]
+# Merge with existing, avoiding duplicates while preserving order
+for p in list(reversed(old_py.split(os.pathsep))) if old_py else []:
+    if p and p not in new_paths:
+        new_paths.append(p)
+os.environ['PYTHONPATH'] = os.pathsep.join(new_paths)
+
 
 def main(argv=None):
     argv = argv if argv is not None else sys.argv[1:]

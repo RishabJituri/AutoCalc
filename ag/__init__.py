@@ -220,6 +220,15 @@ else:
     except Exception:
         nn = None
 
+# Optionally import data submodule if backend provides one
+if hasattr(_backend, "data"):
+    data = _backend.data
+else:
+    try:
+        data = importlib.import_module(f".data", __name__)
+    except Exception:
+        data = None
+
 if nn is not None:
     try:
         if hasattr(nn, 'optim') and hasattr(nn.optim, 'SGD'):
