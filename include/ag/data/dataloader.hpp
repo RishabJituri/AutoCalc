@@ -109,11 +109,13 @@ public:
 
   Batch next() {
     const std::size_t N = ds_->size();
-    if (!has_next()) return Batch{ ag::Variable({}, {0}, false), ag::Variable({}, {0}, false), 0 };
+    if (!has_next()) {
+      throw std::out_of_range("DataLoader::next(): no more batches");
+    }
     std::size_t take = std::min<std::size_t>(opts_.batch_size, indices_.size() - cursor_);
     if (opts_.drop_last && take < opts_.batch_size) {
       // Should not happen due to has_next(), but guard anyway
-      return Batch{ ag::Variable({}, {0}, false), ag::Variable({}, {0}, false), 0 };
+      throw std::out_of_range("DataLoader::next(): insufficient elements for last batch (drop_last)");
     }
     // Collect indices first, then fetch samples. Advance cursor_ only after successful fetches.
     std::vector<std::size_t> take_idx; take_idx.reserve(take);
