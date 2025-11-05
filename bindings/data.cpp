@@ -33,15 +33,14 @@ struct DataLoaderIter {
   : loader(std::move(l)) {}
 
   ag::data::Batch next() {
-    // DataLoader::next() should advance the cursor and return a batched Example.
-    // If you've modeled end-of-epoch with an empty optional, raise StopIteration.
+    // Return next batch or raise StopIteration when there are no more batches.
+    try {
+      if (!loader->has_next()) throw py::stop_iteration();
+    } catch (...) {
+      // If has_next isn't available or throws, fall back to calling next() and checking size.
+    }
     auto ex = loader->next();
-    // If your next() returns std::optional<Example>, adapt here:
-    // if (!ex.has_value()) throw py::stop_iteration();
-    // return *ex;
-
-    // If it throws internally at end, let it propagate; otherwise emulate end:
-    // (Replace the line below with the appropriate end detection if needed)
+    if (ex.size == 0) throw py::stop_iteration();
     return ex;
   }
 };
@@ -64,6 +63,14 @@ void bind_data(py::module_& root) {
       return "<ag.data.Example>";
     });
 
+  // Batch (collated batch container)
+  py::class_<ag::data::Batch>(m, "Batch")
+    .def(py::init<>())
+    .def_readwrite("x", &ag::data::Batch::x)
+    .def_readwrite("y", &ag::data::Batch::y)
+    .def_readwrite("size", &ag::data::Batch::size)
+    .def("__repr__", [](const ag::data::Batch&){ return "<ag.data.Batch>"; });
+
   // Transform = std::function<Example(const Example&)>
   m.attr("Transform") = py::module_::import("typing").attr("Callable");
 
@@ -77,6 +84,8 @@ void bind_data(py::module_& root) {
 
   // Dataset base (abstract) - use trampoline so Python subclasses can override
   py::class_<ag::data::Dataset, PyDataset, std::shared_ptr<ag::data::Dataset>>(m, "Dataset")
+    // allow Python subclasses to call super().__init__()
+    .def(py::init<>())
     .def("size", &ag::data::Dataset::size)
     .def("__len__", &ag::data::Dataset::size)
     .def("get", &ag::data::Dataset::get, py::arg("index"))
@@ -102,10 +111,19 @@ void bind_data(py::module_& root) {
     .def(py::init<std::shared_ptr<ag::data::Dataset>, ag::data::DataLoaderOptions>(),
          py::arg("dataset"), py::arg("options"))
     .def("reset",   &ag::data::DataLoader::reset)
+    .def("rewind",  &ag::data::DataLoader::rewind)
     .def("indices", &ag::data::DataLoader::indices, py::return_value_policy::reference_internal)
     .def_property_readonly("options", &ag::data::DataLoader::options, py::return_value_policy::reference_internal)
     .def("next",    &ag::data::DataLoader::next,
          "Return the next batch (raises StopIteration at end)")
+
+    // number of batches
+    .def("__len__", [](ag::data::DataLoader& dl){
+      const auto& opts = dl.options();
+      std::size_t total = dl.size();
+      if (opts.drop_last) return total / opts.batch_size;
+      return (total + opts.batch_size - 1) / opts.batch_size;
+    })
 
     // Python iterator protocol
     .def("__iter__", [](std::shared_ptr<ag::data::DataLoader> self){

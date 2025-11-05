@@ -67,6 +67,23 @@ inline Batch collate(const std::vector<Example>& samples) {
 
 class DataLoader {
 public:
+  // Backwards-compatible constructors: accept a stack-allocated Dataset reference or raw pointer.
+  // These wrap the pointer in a non-owning shared_ptr (no-op deleter) so DataLoader does not
+  // attempt to delete stack objects. This preserves existing test/example usage while still
+  // allowing the shared_ptr-taking API for Python bindings.
+  DataLoader(Dataset& dataset, DataLoaderOptions opts = {})
+    : ds_(std::shared_ptr<Dataset>(&dataset, [](Dataset*){})), opts_(opts) {
+    if (opts_.batch_size < 1) throw std::invalid_argument("DataLoader: batch_size must be >= 1");
+    reset();
+  }
+
+  DataLoader(Dataset* dataset, DataLoaderOptions opts = {})
+    : ds_(std::shared_ptr<Dataset>(dataset, [](Dataset*){})), opts_(opts) {
+    if (!dataset) throw std::invalid_argument("DataLoader: dataset pointer is null");
+    if (opts_.batch_size < 1) throw std::invalid_argument("DataLoader: batch_size must be >= 1");
+    reset();
+  }
+
   // Accept a shared_ptr<Dataset> so we can hold Python-owned datasets safely
   DataLoader(std::shared_ptr<Dataset> dataset, DataLoaderOptions opts = {})
   : ds_(std::move(dataset)), opts_(opts) {

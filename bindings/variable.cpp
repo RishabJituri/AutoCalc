@@ -12,6 +12,8 @@ namespace py = pybind11;
 
 // forward declare nn binder implemented in bindings/nn.cpp
 void bind_nn(py::module_ &m);
+// forward declare data binder implemented in bindings/data.cpp (in namespace ag_bindings)
+namespace ag_bindings { void bind_data(py::module_ &m); }
 
 // ---- flexible includes ----
 #include "ag/all.hpp"
@@ -33,8 +35,9 @@ struct PyNoGradCtx {
 
 PYBIND11_MODULE(_backend, m) {
   // auto m = m.def_submodule("Variable","This is the variable (tensor) class");
-  // auto nn = m.def_submodule("nn");
   bind_nn(m);
+  // register data submodule bindings
+  ag_bindings::bind_data(m);
   m.attr("__version__") = AG_BINDINGS_VERSION;
 
   // --- Grad mode ---

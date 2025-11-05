@@ -182,8 +182,8 @@ int main(int argc, char** argv) {
     }
 
     // Datasets & loaders
-    MnistDataset train_ds(data_dir, /*train=*/true);
-    MnistDataset test_ds (data_dir, /*train=*/false);
+    auto train_ds = std::make_shared<MnistDataset>(data_dir, /*train=*/true);
+    auto test_ds  = std::make_shared<MnistDataset>(data_dir, /*train=*/false);
 
     ag::data::DataLoaderOptions opts_train;
     opts_train.batch_size = batch;
