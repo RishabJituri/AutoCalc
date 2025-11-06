@@ -121,6 +121,7 @@ def train_ag(model, X, Y, batch_size, epochs, lr, momentum, eval_after_epoch=Tru
     opt = ag.nn.SGD(lr, momentum)
     n = X.shape[0]
     per_epoch_losses = []
+    per_epoch_batch_losses = []
     start = time.time()
     try:
         model.train(True)
@@ -128,7 +129,9 @@ def train_ag(model, X, Y, batch_size, epochs, lr, momentum, eval_after_epoch=Tru
         pass
     for ep in range(epochs):
         idx = np.random.permutation(n)
-        for i in range(0, n, batch_size):
+        batch_losses = []
+        total_batches = (n + batch_size - 1) // batch_size
+        for bi, i in enumerate(range(0, n, batch_size)):
             ids = idx[i:i+batch_size]
             xb = X[ids]
             yb = Y[ids]
@@ -138,12 +141,27 @@ def train_ag(model, X, Y, batch_size, epochs, lr, momentum, eval_after_epoch=Tru
             L = ag.nn.cross_entropy(logits, list(map(int, yb.tolist())))
             L.backward()
             opt.step(model)
+
+            # robustly extract scalar loss and record per-batch
+            try:
+                lval = float(np.asarray(L.value())) if callable(getattr(L, 'value', None)) else float(np.asarray(L))
+            except Exception:
+                try:
+                    lval = float(np.asarray(L))
+                except Exception:
+                    lval = float(0.0)
+            batch_losses.append(lval)
+            # print lightweight per-batch progress
+            if (bi + 1) % 10 == 0 or (bi + 1) == total_batches:
+                print(f"ep {ep+1}/{epochs} batch {bi+1}/{total_batches} loss={lval:.4f}")
+
+        per_epoch_batch_losses.append(batch_losses)
         if eval_after_epoch:
-            loss_ep, acc_ep = evaluate_ag_model(model, X, Y, batch_size)
+            loss_ep = float(np.mean(batch_losses)) if batch_losses else float('nan')
             per_epoch_losses.append(loss_ep)
-            print(f"AG epoch {ep+1}/{epochs}: loss={loss_ep:.4f}, acc={acc_ep:.3f}")
+            print(f"AG epoch {ep+1}/{epochs}: loss={loss_ep:.4f}, batches={len(batch_losses)}")
     duration = time.time() - start
-    return duration, per_epoch_losses
+    return duration, per_epoch_losses, per_epoch_batch_losses
 
 
 def try_import_torch():
@@ -163,12 +181,12 @@ def run(args):
 
     model_ag = SimpleNet(num_classes=10)
     loss0, acc0 = evaluate_ag_model(model_ag, X, Y, args.bs)
-    t_ag, ag_losses = train_ag(model_ag, X, Y, args.bs, args.epochs, args.lr, args.momentum)
+    t_ag, ag_losses, ag_batch_losses = train_ag(model_ag, X, Y, args.bs, args.epochs, args.lr, args.momentum)
     loss1, acc1 = evaluate_ag_model(model_ag, X, Y, args.bs)
     print(f"AG model: loss {loss0:.4f}->{loss1:.4f}, acc {acc0:.3f}->{acc1:.3f}, train_time {t_ag:.2f}s")
 
     summary = {'n': int(args.n), 'bs': int(args.bs), 'epochs': int(args.epochs),
-               'ag': {'loss_before': loss0, 'loss_after': loss1, 'acc_before': acc0, 'acc_after': acc1, 'time_s': t_ag, 'losses': ag_losses}}
+               'ag': {'loss_before': loss0, 'loss_after': loss1, 'acc_before': acc0, 'acc_after': acc1, 'time_s': t_ag, 'losses': ag_losses, 'batch_losses': ag_batch_losses}}
 
     if args.compare_torch and try_import_torch():
         import torch

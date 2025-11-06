@@ -74,7 +74,7 @@ class SmallResNet(ag.nn.Module):
         return x
 
 
-@pytest.mark.slow
+# @pytest.mark.slow
 def test_resnet_mnist_small_train():
     # local MNIST
     data_root = os.path.abspath(os.path.join(os.getcwd(), "Data"))
