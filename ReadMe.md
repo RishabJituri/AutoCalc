@@ -1,4 +1,191 @@
-# AutoCalc — C++ API
+# AutoCalc — C++ and Python APIs
+
+This repository provides a small neural-network/autograd engine in C++ with Python bindings.
+This README now documents both:
+- The Python bindings (quickstart, API overview, and MNIST benchmarks)
+- The C++ API (unchanged and still available below)
+
+---
+
+## Quick links
+
+- Python quickstart: Python bindings setup and smoke tests
+- Python API overview: ag.Variable, ops, ag.nn (layers/optim/losses), ag.data (Dataset/DataLoader)
+- Benchmarks (Python): `benchmarks/ResNet_MNIST.py`, `benchmarks/SimpleNet_MNIST.py`
+- C++ headers: `include/ag/`
+- Examples (C++): `examples/`
+- Tests (C++): `tests/`
+
+---
+
+## Python bindings — quickstart (macOS, zsh)
+
+1) Build the project (produces the Python package under `build/python/ag`)
+
+```zsh
+mkdir -p build
+cd build
+cmake ..
+cmake --build . -- -j
+```
+
+2) Point Python at the built bindings (no pip install required)
+
+```zsh
+# From repo root
+export PYTHONPATH="$(pwd)/build/python:$PYTHONPATH"
+```
+
+3) Smoke test
+
+```zsh
+python - <<'PY'
+import ag, numpy as np
+x = ag.Variable.from_numpy(np.ones((2,3), dtype=np.float32), requires_grad=True)
+y = ag.relu(x)
+y_sum = np.asarray(y.value()).sum()
+print('OK ag:', y_sum)
+PY
+```
+
+If this prints `OK ag: ...`, the bindings are importable and ops work end-to-end.
+
+Data location note: Python benchmarks/scripts expect local MNIST IDX files under `Data/MNIST/raw` (train-images-idx3-ubyte, train-labels-idx1-ubyte, etc.). No torchvision is required.
+
+---
+
+## Python API overview
+
+The Python package roughly mirrors the C++ API and exposes a lightweight, PyTorch-like surface:
+
+- Tensors/autograd: `ag.Variable`
+  - Construct from numpy: `ag.Variable.from_numpy(np_array, requires_grad=...)`
+  - Common ops: `ag.relu`, `ag.flatten`, `ag.reshape`, elementwise arithmetic
+  - Inspect: `v.shape()`; convert: `np.asarray(v.value())`
+
+- Neural network: `ag.nn`
+  - Modules: subclass `ag.nn.Module` and implement `forward(self, x)`
+  - Layers: `Conv2d`, `BatchNorm2d`, `Linear`, `AvgPool2d`, `Dropout`, etc.
+  - Optimizers: `ag.nn.SGD(lr, momentum)`; call `model.zero_grad()`, `loss.backward()`, `opt.step(model)`
+  - Losses: `ag.nn.cross_entropy(logits, targets)`
+
+- Data: `ag.data`
+  - Define a dataset by subclassing `ag.data.Dataset` with `size()` and `get(idx)` returning an `ag.data.Example` with `x`, `y`.
+  - Batch with `ag.data.DataLoader(dataset, options)` where `options = ag.data.DataLoaderOptions()` (set `batch_size`, `shuffle`, `seed`).
+
+Minimal dataset example (MNIST IDX without torchvision):
+
+```python
+import os, struct, numpy as np, ag
+
+class LocalMNIST(ag.data.Dataset):
+    def __init__(self, root, train=True, max_samples=None):
+        super().__init__()
+        d = os.path.join(root, 'MNIST', 'raw')
+        img = os.path.join(d, 'train-images-idx3-ubyte' if train else 't10k-images-idx3-ubyte')
+        lbl = os.path.join(d, 'train-labels-idx1-ubyte' if train else 't10k-labels-idx1-ubyte')
+        with open(img,'rb') as f:
+            _, n, r, c = struct.unpack('>IIII', f.read(16))
+            X = np.frombuffer(f.read(), dtype=np.uint8).reshape(n, r, c)
+        with open(lbl,'rb') as f:
+            _, n2 = struct.unpack('>II', f.read(8))
+            Y = np.frombuffer(f.read(), dtype=np.uint8)
+        if max_samples:
+            X, Y = X[:max_samples], Y[:max_samples]
+        self.X, self.Y = X, Y
+    def size(self):
+        return int(self.X.shape[0])
+    def get(self, idx):
+        i = int(idx)
+        x = (self.X[i].astype(np.float32)/255.0)[None, :, :]
+        y = np.array([int(self.Y[i])], dtype=np.int64)
+        ex = ag.data.Example()
+        ex.x = ag.Variable.from_numpy(x, requires_grad=False)
+        ex.y = ag.Variable.from_numpy(y, requires_grad=False)
+        return ex
+```
+
+Training sketch (SmallResNet):
+
+```python
+class SmallResBlock(ag.nn.Module):
+    def __init__(self, ch):
+        super().__init__()
+        self.conv1 = ag.nn.Conv2d(ch, ch, 3,3,1,1,1,1, bias=True, init_scale=0.02, seed=0)
+        self.bn1 = ag.nn.BatchNorm2d(ch)
+        self.conv2 = ag.nn.Conv2d(ch, ch, 3,3,1,1,1,1, bias=True, init_scale=0.02, seed=1)
+        self.bn2 = ag.nn.BatchNorm2d(ch)
+    def forward(self, x):
+        id = x
+        x = ag.relu(self.bn1(self.conv1(x)))
+        x = self.bn2(self.conv2(x)) + id
+        return ag.relu(x)
+
+class SmallResNet(ag.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = ag.nn.Conv2d(1, 8, 3,3,1,1,1,1, bias=True, init_scale=0.02, seed=2)
+        self.bn = ag.nn.BatchNorm2d(8)
+        self.block = SmallResBlock(8)
+        self.pool = ag.nn.AvgPool2d(28,28,0,0,0,0)
+        self.fc = ag.nn.Linear(8, 10, seed=3)
+    def forward(self, x):
+        x = ag.relu(self.bn(self.conv(x)))
+        x = self.block(x)
+        x = self.pool(x)
+        x = ag.flatten(x, 1)
+        return self.fc(x)
+
+opt = ag.nn.SGD(0.05, 0.9)
+```
+
+---
+
+## Python MNIST benchmarks
+
+Two ready-to-run scripts demonstrate the Python API and produce plots/summaries to compare training behavior.
+
+Common setup (from repo root):
+
+```zsh
+export PYTHONPATH="$(pwd)/build/python:$PYTHONPATH"
+```
+
+- SimpleNet (AG only, optional Torch compare):
+
+```zsh
+python benchmarks/SimpleNet_MNIST.py --n 1024 --bs 64 --epochs 3 --plot
+```
+
+- ResNet (AG, optional Torch mirror + combined plots):
+
+```zsh
+python benchmarks/ResNet_MNIST.py \
+  --n 35000 --bs 64 --epochs 1 \
+  --seed 0 --plot --step-interval 10 --plot-deriv \
+  --compare-torch
+```
+
+What the scripts do:
+- Load MNIST IDX directly (no torchvision) from `Data/MNIST/raw`
+- Build identical SmallResNet in AG and Torch
+- Train with per-epoch, per-batch, and step-sampled loss tracking
+- Optionally compute and plot “improvement” (Δloss) per step
+- Save plots (Agg backend) and append JSON lines to `results_resnet.txt`
+
+Artifacts:
+- `results_resnet_*.png` (epoch loss)
+- `results_resnet_train_steps_*.png` (per-batch loss, combined)
+- `results_resnet_train_steps_sampled_*.png` (every-k-step loss, combined)
+- `results_resnet_train_steps_improvement_*.png` and `*_sampled_improvement_*.png` when `--plot-deriv` is set
+- `results_resnet.txt` summaries (AG and Torch blocks)
+
+Troubleshooting Torch accuracy:
+- BatchNorm running stats can underperform on very few batches. Try more epochs, higher BN momentum, or evaluate in mini-batches using train-mode stats.
+
+---
+
+## C++ API (original documentation)
 
 This repository provides a small neural-network/autograd engine in C++.
 This README documents the public C++ API surface that is most useful to C++ consumers: the `Variable` autograd type and the high-level neural-network components (`Module`, `Sequential`, common layers and optimizers).
