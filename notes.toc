@@ -1,0 +1,100 @@
+\contentsline {part}{I\hspace {1em}Introduction}{4}{part.1}%
+\contentsline {chapter}{\numberline {1}What Is AutoCalc?}{5}{chapter.1}%
+\contentsline {section}{\numberline {1.1}Who This Document Is For}{5}{section.1.1}%
+\contentsline {section}{\numberline {1.2}Conventions}{5}{section.1.2}%
+\contentsline {chapter}{\numberline {2}Repository Layout}{7}{chapter.2}%
+\contentsline {part}{II\hspace {1em}The Autograd Core}{8}{part.2}%
+\contentsline {chapter}{\numberline {3}Automatic Differentiation: The Big Picture}{9}{chapter.3}%
+\contentsline {section}{\numberline {3.1}What Problem Does Autograd Solve?}{9}{section.3.1}%
+\contentsline {section}{\numberline {3.2}Why Reverse Mode?}{9}{section.3.2}%
+\contentsline {chapter}{\numberline {4}Node and Variable}{10}{chapter.4}%
+\contentsline {section}{\numberline {4.1}The Node Struct}{10}{section.4.1}%
+\contentsline {section}{\numberline {4.2}The Variable Class}{11}{section.4.2}%
+\contentsline {section}{\numberline {4.3}Grad Mode and NoGradGuard}{11}{section.4.3}%
+\contentsline {chapter}{\numberline {5}The Backward Pass}{13}{chapter.5}%
+\contentsline {section}{\numberline {5.1}Topological Sort}{13}{section.5.1}%
+\contentsline {section}{\numberline {5.2}Post-Backward Cleanup}{14}{section.5.2}%
+\contentsline {section}{\numberline {5.3}zero\_grad}{14}{section.5.3}%
+\contentsline {part}{III\hspace {1em}The Operator Library}{15}{part.3}%
+\contentsline {chapter}{\numberline {6}Tensor Utilities}{16}{chapter.6}%
+\contentsline {chapter}{\numberline {7}Elementwise Operations}{17}{chapter.7}%
+\contentsline {section}{\numberline {7.1}Pattern: How an Op Is Built}{17}{section.7.1}%
+\contentsline {subsection}{\numberline {7.1.1}Forward}{17}{subsection.7.1.1}%
+\contentsline {subsection}{\numberline {7.1.2}Backward}{17}{subsection.7.1.2}%
+\contentsline {subsection}{\numberline {7.1.3}Parallelism}{18}{subsection.7.1.3}%
+\contentsline {section}{\numberline {7.2}Multiplication Backward}{18}{section.7.2}%
+\contentsline {section}{\numberline {7.3}Other Elementwise Ops}{18}{section.7.3}%
+\contentsline {chapter}{\numberline {8}Activations}{19}{chapter.8}%
+\contentsline {chapter}{\numberline {9}Reduction Operations}{20}{chapter.9}%
+\contentsline {chapter}{\numberline {10}Linear Algebra: Matmul and Transpose}{21}{chapter.10}%
+\contentsline {section}{\numberline {10.1}Matrix Multiplication}{21}{section.10.1}%
+\contentsline {subsection}{\numberline {10.1.1}Forward}{21}{subsection.10.1.1}%
+\contentsline {subsection}{\numberline {10.1.2}Backward}{21}{subsection.10.1.2}%
+\contentsline {subsection}{\numberline {10.1.3}The weak\_ptr Fix}{21}{subsection.10.1.3}%
+\contentsline {section}{\numberline {10.2}Transpose}{21}{section.10.2}%
+\contentsline {section}{\numberline {10.3}Slicing: \texttt {at(A, begin, end)}}{22}{section.10.3}%
+\contentsline {part}{IV\hspace {1em}The Neural Network Module System}{23}{part.4}%
+\contentsline {chapter}{\numberline {11}Module Base Class}{24}{chapter.11}%
+\contentsline {subsection}{\numberline {11.0.1}Parameter Collection}{24}{subsection.11.0.1}%
+\contentsline {subsection}{\numberline {11.0.2}Train vs.\ Eval Mode}{24}{subsection.11.0.2}%
+\contentsline {chapter}{\numberline {12}Sequential}{25}{chapter.12}%
+\contentsline {chapter}{\numberline {13}Layers}{26}{chapter.13}%
+\contentsline {section}{\numberline {13.1}Linear (Fully Connected)}{26}{section.13.1}%
+\contentsline {section}{\numberline {13.2}Conv2d (2D Convolution)}{26}{section.13.2}%
+\contentsline {subsection}{\numberline {13.2.1}What Is Convolution?}{26}{subsection.13.2.1}%
+\contentsline {subsection}{\numberline {13.2.2}The im2col Trick: Why and How}{26}{subsection.13.2.2}%
+\contentsline {subsection}{\numberline {13.2.3}Concrete Example}{27}{subsection.13.2.3}%
+\contentsline {subsection}{\numberline {13.2.4}Blocked im2col in AutoCalc}{27}{subsection.13.2.4}%
+\contentsline {subsection}{\numberline {13.2.5}Backward Pass}{28}{subsection.13.2.5}%
+\contentsline {section}{\numberline {13.3}BatchNorm2d}{28}{section.13.3}%
+\contentsline {section}{\numberline {13.4}MaxPool2d and AvgPool2d}{28}{section.13.4}%
+\contentsline {section}{\numberline {13.5}Dropout}{29}{section.13.5}%
+\contentsline {section}{\numberline {13.6}LSTM}{29}{section.13.6}%
+\contentsline {chapter}{\numberline {14}Loss Functions}{30}{chapter.14}%
+\contentsline {section}{\numberline {14.1}Cross-Entropy Loss}{30}{section.14.1}%
+\contentsline {chapter}{\numberline {15}SGD Optimizer}{31}{chapter.15}%
+\contentsline {part}{V\hspace {1em}The SGEMM Kernel and Parallelism}{32}{part.5}%
+\contentsline {chapter}{\numberline {16}Why a Custom SGEMM?}{33}{chapter.16}%
+\contentsline {section}{\numberline {16.1}The Memory Hierarchy Problem}{33}{section.16.1}%
+\contentsline {section}{\numberline {16.2}Tiling Strategy}{33}{section.16.2}%
+\contentsline {section}{\numberline {16.3}The 8$\times $8 Micro-Kernel}{34}{section.16.3}%
+\contentsline {section}{\numberline {16.4}Packing}{34}{section.16.4}%
+\contentsline {section}{\numberline {16.5}Transpose-Aware Overload}{34}{section.16.5}%
+\contentsline {chapter}{\numberline {17}Thread Pool and parallel\_for}{35}{chapter.17}%
+\contentsline {section}{\numberline {17.1}Why a Custom Thread Pool?}{35}{section.17.1}%
+\contentsline {section}{\numberline {17.2}Thread Pool Architecture}{35}{section.17.2}%
+\contentsline {section}{\numberline {17.3}Thread-Local Storage (TLS)}{36}{section.17.3}%
+\contentsline {section}{\numberline {17.4}parallel\_for}{37}{section.17.4}%
+\contentsline {subsection}{\numberline {17.4.1}Algorithm}{37}{subsection.17.4.1}%
+\contentsline {subsection}{\numberline {17.4.2}Grain Size}{37}{subsection.17.4.2}%
+\contentsline {subsection}{\numberline {17.4.3}The Nesting Problem}{37}{subsection.17.4.3}%
+\contentsline {section}{\numberline {17.5}Configuration}{38}{section.17.5}%
+\contentsline {subsection}{\numberline {17.5.1}Determinism vs. Performance Trade-off}{38}{subsection.17.5.1}%
+\contentsline {part}{VI\hspace {1em}Data Loading}{39}{part.6}%
+\contentsline {chapter}{\numberline {18}Datasets, Examples, and DataLoader}{40}{chapter.18}%
+\contentsline {section}{\numberline {18.1}Dataset and Example}{40}{section.18.1}%
+\contentsline {section}{\numberline {18.2}DataLoader}{40}{section.18.2}%
+\contentsline {section}{\numberline {18.3}Transforms}{40}{section.18.3}%
+\contentsline {part}{VII\hspace {1em}Python Bindings}{41}{part.7}%
+\contentsline {chapter}{\numberline {19}pybind11 Architecture}{42}{chapter.19}%
+\contentsline {section}{\numberline {19.1}Binding Files}{42}{section.19.1}%
+\contentsline {section}{\numberline {19.2}The Python Package Shim}{42}{section.19.2}%
+\contentsline {part}{VIII\hspace {1em}Build System}{43}{part.8}%
+\contentsline {chapter}{\numberline {20}CMake Configuration}{44}{chapter.20}%
+\contentsline {section}{\numberline {20.1}Key Targets}{44}{section.20.1}%
+\contentsline {section}{\numberline {20.2}Compile Flags}{44}{section.20.2}%
+\contentsline {part}{IX\hspace {1em}Memory Management and the OOM Fix}{45}{part.9}%
+\contentsline {chapter}{\numberline {21}The shared\_ptr Ownership Model}{46}{chapter.21}%
+\contentsline {chapter}{\numberline {22}The Reference Cycle Bug}{47}{chapter.22}%
+\contentsline {section}{\numberline {22.1}The Problem}{47}{section.22.1}%
+\contentsline {section}{\numberline {22.2}The Symptom}{47}{section.22.2}%
+\contentsline {chapter}{\numberline {23}The Fix}{48}{chapter.23}%
+\contentsline {section}{\numberline {23.1}Fix 1: weak\_ptr in Closures}{48}{section.23.1}%
+\contentsline {section}{\numberline {23.2}Fix 2: Post-Backward Cleanup}{48}{section.23.2}%
+\contentsline {section}{\numberline {23.3}Verified Results}{48}{section.23.3}%
+\contentsline {chapter}{\numberline {24}Leak Detection Infrastructure}{50}{chapter.24}%
+\contentsline {part}{X\hspace {1em}Appendices}{51}{part.10}%
+\contentsline {chapter}{\numberline {A}Complete Type Reference}{52}{appendix.A}%
+\contentsline {chapter}{\numberline {B}Operator Reference}{53}{appendix.B}%
+\contentsline {chapter}{\numberline {C}Key Design Patterns}{54}{appendix.C}%
+\contentsline {chapter}{\numberline {D}Glossary}{55}{appendix.D}%

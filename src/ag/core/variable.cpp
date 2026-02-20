@@ -66,6 +66,16 @@ void Variable::backward(const std::vector<float>& seed) {
     auto& node = *it;
     if (node->backward) node->backward();
   }
+
+  // Post-backward cleanup: release the computation graph so intermediate
+  // nodes can be freed.  Leaf nodes (no parents) keep their grad intact.
+  // Post-backward cleanup: release the computation graph so intermediate
+  // nodes can be freed.  Leaf nodes (no parents) keep their grad intact.
+  for (auto& node : order) {
+    if (node->parents.empty()) continue;   // leaf — keep alive
+    node->backward = nullptr;
+    node->parents.clear();
+  }
 }
 
 

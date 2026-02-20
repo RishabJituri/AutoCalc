@@ -293,7 +293,8 @@ Variable matmul(const Variable& A, const Variable& B) {
 
   if (req) {
     C.n->parents = { A.n, B.n };
-    C.n->backward = [An=A.n, Bn=B.n, Cn=C.n, Ash, Bsh, Cshape, tp]() {
+    C.n->backward = [An=A.n, Bn=B.n, Cw=std::weak_ptr<Node>(C.n), Ash, Bsh, Cshape, tp]() {
+      auto Cn = Cw.lock(); if (!Cn) return;
       // Ensure grads allocated
       if (An->grad.size() != An->value.size()) An->grad.assign(An->value.size(), 0.0f);
       if (Bn->grad.size() != Bn->value.size()) Bn->grad.assign(Bn->value.size(), 0.0f);
@@ -560,7 +561,8 @@ Variable transpose(const Variable& A) {
   Variable C(out, OutSh, req);
   if (req) {
     C.n->parents = { A.n };
-    C.n->backward = [An = A.n, Cn = C.n, Ash, OutSh]() {
+    C.n->backward = [An = A.n, Cw = std::weak_ptr<Node>(C.n), Ash, OutSh]() {
+      auto Cn = Cw.lock(); if (!Cn) return;
       // Ensure parent grad allocated
       if (An->grad.size() != An->value.size()) An->grad.assign(An->value.size(), 0.0f);
       const float* dC = Cn->grad.data();

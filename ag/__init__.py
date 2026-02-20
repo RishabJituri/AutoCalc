@@ -163,6 +163,7 @@ _required = [
     "broadcast_to",
     "flatten", "reshape",
     "is_grad_enabled", "set_grad_enabled", "nograd",
+    "live_node_count",
     "stop_gradient", "detach",
 ]
 _missing = [s for s in _required if not hasattr(_backend, s)] if _backend is not None else list(_required)
@@ -207,6 +208,7 @@ reshape = _backend.reshape
 is_grad_enabled = _backend.is_grad_enabled
 set_grad_enabled = _backend.set_grad_enabled
 nograd = _backend.nograd
+live_node_count = _backend.live_node_count
 
 stop_gradient = _backend.stop_gradient
 detach = _backend.detach
@@ -456,6 +458,7 @@ __all__ = [
     "matmul", "transpose", "flatten", "reshape",
     "reduce_sum", "reduce_mean", "broadcast_to",
     "is_grad_enabled", "set_grad_enabled", "nograd", "stop_gradient", "detach",
+    "live_node_count",
 ]
 
 if nn is not None:

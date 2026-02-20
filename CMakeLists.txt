@@ -33,7 +33,7 @@ set(AUTO_CXXFLAGS_DBG "-std=c++17 -O0 -g -Wall -Wextra -Wpedantic -fno-omit-fram
 set(AUTO_LDFLAGS_DBG  "-fsanitize=address,undefined")
 
 # ------------------------ Flags: Fast/Release ------------------
-set(AUTO_FAST_CXXFLAGS "-std=c++17 -O3 -DNDEBUG -Wall -Wextra -fno-omit-frame-pointer -ffast-math ${AUTO_FAST_ARCH} -MMD -MP")
+set(AUTO_FAST_CXXFLAGS "-std=c++17 -O3 -DNDEBUG -Wall -Wextra -fno-omit-frame-pointer ${AUTO_FAST_ARCH} -MMD -MP")
 set(AUTO_FAST_LDFLAGS  "")
 
 # Extract arch flags (-mcpu/-march) for fast targets so they can be isolated
@@ -55,7 +55,7 @@ endforeach()
 
 # Common extras (frame-pointer etc.)
 set(AUTO_COMMON_FLAGS "")
-foreach(flag "-fno-omit-frame-pointer" "-ffast-math")
+foreach(flag "-fno-omit-frame-pointer")
   string(FIND "${AUTO_CXXFLAGS_DBG} ${AUTO_FAST_CXXFLAGS}" "${flag}" _found)
   if(NOT _found EQUAL -1)
     list(APPEND AUTO_COMMON_FLAGS ${flag})
@@ -65,10 +65,10 @@ endforeach()
 # ------------------------ Source discovery ---------------------
 # Mirror Makefile's globbing approach
 file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS "src/*.cpp")
-file(GLOB TEST_FILES CONFIGURE_DEPENDS "tests/*.cpp")
-set(MNIST_EXAMPLE "examples/mnist_demo.cpp")
-set(RESNET_EXAMPLE "examples/ResNet_demo.cpp")
-set(LSTM_EXAMPLE  "examples/lstm_shakespeare.cpp")
+file(GLOB TEST_FILES CONFIGURE_DEPENDS "c_tests/*.cpp")
+set(MNIST_EXAMPLE "c_demos/mnist_demo.cpp")
+set(RESNET_EXAMPLE "c_demos/ResNet_demo.cpp")
+set(LSTM_EXAMPLE  "c_demos/lstm_shakespeare.cpp")
 
 # ------------------------ Output layout ------------------------
 # Recreate output paths similar to the Makefile
@@ -113,15 +113,39 @@ if(pybind11_FOUND AND Python_FOUND)
   endif()
   # Link the core static library so the module exposes the project symbols
   target_link_libraries(ag_python PRIVATE autocalc_lib pybind11::module ${THREADS_LIB})
+
+  # ---- Force fast flags on the Python extension and core lib ----
+  # Compose fast compile/link flags (mirrors fast demo targets)
+  separate_arguments(_fast_cxx_for_py NATIVE_COMMAND "${AUTO_FAST_CXXFLAGS}")
+  separate_arguments(_fast_ld_for_py  NATIVE_COMMAND "${AUTO_FAST_LDFLAGS}")
+  target_compile_options(autocalc_lib PRIVATE ${AUTO_WARN_FLAGS} -DNDEBUG -O3 -ffast-math -fno-finite-math-only -mcpu=native ${AUTO_COMMON_FLAGS} ${_fast_cxx_for_py} -g0 -fno-sanitize=address -fno-sanitize=undefined)
+  target_link_options(autocalc_lib PRIVATE ${_fast_ld_for_py} -fno-sanitize=address -fno-sanitize=undefined)
+  target_compile_options(ag_python   PRIVATE ${AUTO_WARN_FLAGS} -DNDEBUG -O3 -ffast-math -fno-finite-math-only -mcpu=native ${AUTO_COMMON_FLAGS} ${_fast_cxx_for_py} -g0 -fno-sanitize=address -fno-sanitize=undefined)
+  target_link_options(ag_python   PRIVATE ${_fast_ld_for_py} -fno-sanitize=address -fno-sanitize=undefined)
+  if(APPLE)
+    # Allow unresolved Python symbols to be resolved at runtime (no libpython link required)
+    target_link_options(ag_python PRIVATE -undefined dynamic_lookup)
+  endif()
+
   # Build the compiled backend as a submodule named _backend inside the `ag` package.
-  # This makes the compiled extension importable as `ag._backend` while the Python shim
-  # remains the package entrypoint.
   set_target_properties(ag_python PROPERTIES PREFIX "" OUTPUT_NAME "_backend")
-  # Place the compiled extension under build/python/ag so `build/python` added to PYTHONPATH
-  # allows importing `ag` (the Python package) and `ag._backend` (the compiled submodule).
+  # Place the compiled extension under build/python/ag so it is importable via PYTHONPATH=build/python
   set_target_properties(ag_python PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/python/ag")
   # Ensure directory exists at configure time for some build systems
   file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/python/ag")
+
+  # Copy the package __init__.py into build/python/ag/ so that the build tree
+  # is a proper Python package (not a bare namespace package).  Without this,
+  # `import ag` when PYTHONPATH=build/python finds the directory but never
+  # executes __init__.py, so ag.nn / ag.data / all re-exports are missing.
+  add_custom_command(
+    TARGET ag_python POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_SOURCE_DIR}/ag/__init__.py"
+      "${CMAKE_BINARY_DIR}/python/ag/__init__.py"
+    COMMENT "Copying ag/__init__.py → build/python/ag/__init__.py"
+  )
+
   add_custom_target(build-bindings DEPENDS ag_python)
 else()
   message(STATUS "Python bindings target skipped (pybind11 or Python not available).")

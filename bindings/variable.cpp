@@ -45,6 +45,11 @@ PYBIND11_MODULE(_backend, m) {
   m.def("set_grad_enabled", &ag::set_grad_enabled, py::arg("enabled"),
         "Enable/disable global grad mode for new nodes");
 
+  // --- Live‑node counter (leak detection) ---
+  m.def("live_node_count", []() -> int64_t {
+    return ag::g_live_node_count.load(std::memory_order_relaxed);
+  }, "Return the number of currently live Node objects (for leak detection)");
+
   py::class_<PyNoGradCtx>(m, "nograd")
       .def(py::init<>())
       .def("__enter__", &PyNoGradCtx::enter, py::return_value_policy::reference_internal)

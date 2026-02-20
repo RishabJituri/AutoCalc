@@ -18,7 +18,7 @@ struct Sequential : Module {
   // Registers the submodule so train()/eval()/parameters() recurse correctly
   void push(std::shared_ptr<Module> m) {
     if (!m) return;
-    register_module(*m);          // use the unnamed overload; or name it if you want
+    register_module(m);           // owning overload — shared_ptr keeps child alive
     layers.emplace_back(std::move(m));
   }
 

@@ -11,9 +11,9 @@ This README now documents both:
 
 - Python quickstart: Python bindings setup and smoke tests
 - Python API overview: ag.Variable, ops, ag.nn (layers/optim/losses), ag.data (Dataset/DataLoader)
-- Benchmarks (Python): `benchmarks/ResNet_MNIST.py`, `benchmarks/SimpleNet_MNIST.py`
+- Benchmarks (Python): `py_demos/ResNet_MNIST.py`, `py_demos/SimpleNet_MNIST.py`
 - C++ headers: `include/ag/`
-- Examples (C++): `examples/`
+- C demos (C++): `c_demos/`
 - Tests (C++): `tests/`
 
 ---
@@ -154,13 +154,13 @@ export PYTHONPATH="$(pwd)/build/python:$PYTHONPATH"
 - SimpleNet (AG only, optional Torch compare):
 
 ```zsh
-python benchmarks/SimpleNet_MNIST.py --n 1024 --bs 64 --epochs 3 --plot
+python py_demos/SimpleNet_MNIST.py --n 1024 --bs 64 --epochs 3 --plot
 ```
 
 - ResNet (AG, optional Torch mirror + combined plots):
 
 ```zsh
-python benchmarks/ResNet_MNIST.py \
+python py_demos/ResNet_MNIST.py \
   --n 35000 --bs 64 --epochs 1 \
   --seed 0 --plot --step-interval 10 --plot-deriv \
   --compare-torch
@@ -190,7 +190,7 @@ Troubleshooting Torch accuracy:
 This repository provides a small neural-network/autograd engine in C++.
 This README documents the public C++ API surface that is most useful to C++ consumers: the `Variable` autograd type and the high-level neural-network components (`Module`, `Sequential`, common layers and optimizers).
 
-This file is a concise developer reference — see the headers under `include/ag/` for full signatures and the `tests/` and `examples/` directories for usage patterns.
+This file is a concise developer reference — see the headers under `include/ag/` for full signatures and the `tests/` and `c_demos/` directories for usage patterns.
 
 ---
 
@@ -201,14 +201,14 @@ This file is a concise developer reference — see the headers under `include/ag
 - Ops: `include/ag/ops/`
 - NN: `include/ag/nn/`
 - Data utilities: `include/ag/data/dataloader.hpp`
-- Examples: `examples/`
+- C demos: `c_demos/`
 - Tests: `tests/`
 
 ---
 
 ## Build (macOS, zsh)
 
-Create a build directory and build the default targets (tests + examples where available):
+Create a build directory and build the default targets (tests + demos where available):
 
 ```zsh
 mkdir -p build
@@ -328,9 +328,9 @@ Use `InMemoryDataset` for easy experiments and `DataLoaderOptions` to configure 
 
 ---
 
-## Examples & experiments
+## C demos & experiments
 
-- `examples/mnist_demo.cpp` — training loop and dataset loading for MNIST/FashionMNIST.
+- `c_demos/mnist_demo.cpp` — training loop and dataset loading for MNIST/FashionMNIST.
 - `experiments/` — small Python experiments and scripts used during development.
 
 Recorded runs and metrics are stored in `results_mnist.txt` and `results_resnet.txt`.

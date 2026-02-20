@@ -47,14 +47,23 @@ def test_pooling_forward_backward_and_integration():
         elif hasattr(ag, 'relu'):
             out_relu = ag.relu(out)
         else:
-            # fallback to numpy clamp via conversion and back to Variable
-            np_out = to_numpy(out)
-            np_relu = np.maximum(np_out, 0.0)
-            out_relu = ag.Variable.from_numpy(np_relu)
+            # fallback: try to preserve autograd using framework ops
+            try:
+                out_relu = ag.clamp(out, 0.0, 1e30)
+            except Exception:
+                # try elementwise expression if supported; otherwise skip
+                try:
+                    out_relu = out * (out > 0)
+                except Exception:
+                    pytest.skip("Cannot perform autograd-preserving ReLU with this ag binding")
     except Exception:
-        np_out = to_numpy(out)
-        np_relu = np.maximum(np_out, 0.0)
-        out_relu = ag.Variable.from_numpy(np_relu)
+        try:
+            out_relu = ag.clamp(out, 0.0, 1e30)
+        except Exception:
+            try:
+                out_relu = out * (out > 0)
+            except Exception:
+                pytest.skip("Cannot perform autograd-preserving ReLU with this ag binding")
     pooled = ag.nn.MaxPool2d(2, 2).forward(out_relu)
 
     # shapes: pooled should have fewer or equal elements than the pre-pooled tensor

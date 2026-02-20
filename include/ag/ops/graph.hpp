@@ -9,10 +9,13 @@ Variable stop_gradient(const Variable& x);
 Variable detach(const Variable& x);
 
 // RAII guard to disable/enable grad building in current thread.
+// Reentrant: nested guards correctly restore the previous state.
 struct NoGradGuard {
   NoGradGuard();
   ~NoGradGuard();
   NoGradGuard(const NoGradGuard&) = delete;
   NoGradGuard& operator=(const NoGradGuard&) = delete;
+private:
+  bool prev_;  // saved grad-enabled state
 };
 }

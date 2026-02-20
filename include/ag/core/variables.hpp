@@ -3,6 +3,7 @@
 #include <vector>
 #include <functional>
 #include <cstddef>
+#include <atomic>
 
 namespace ag {
 
@@ -11,6 +12,10 @@ inline thread_local bool __grad_enabled = true;
 inline bool is_grad_enabled() { return __grad_enabled; }
 inline void set_grad_enabled(bool v) { __grad_enabled = v; }
 
+// ── Live‑Node counter (leak detection) ──────────────────────────────────────
+// Incremented in Node ctor, decremented in Node dtor.
+// Exposed to Python via `ag.live_node_count()`.
+inline std::atomic<int64_t> g_live_node_count{0};
 
 struct Node {
   std::vector<float> value;                // flattened tensor
@@ -20,6 +25,15 @@ struct Node {
 
   std::vector<std::shared_ptr<Node>> parents; // inputs
   std::function<void()> backward;             // local VJP
+
+  Node()  { g_live_node_count.fetch_add(1, std::memory_order_relaxed); }
+  ~Node() { g_live_node_count.fetch_sub(1, std::memory_order_relaxed); }
+
+  // Non-copyable, non-movable (shared_ptr manages lifetime)
+  Node(const Node&) = delete;
+  Node& operator=(const Node&) = delete;
+  Node(Node&&) = delete;
+  Node& operator=(Node&&) = delete;
 };
 
 class Variable {

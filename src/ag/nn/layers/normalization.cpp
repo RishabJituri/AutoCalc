@@ -72,10 +72,6 @@ Variable BatchNorm2d::forward(const Variable& X) {
     var  = running_var .n->value;
   }
 
-  // register parameters (gamma/beta)
-  register_parameter("gamma", gamma);
-  register_parameter("beta", beta);
-
   // prepare output
   auto out = std::make_shared<Node>();
   out->shape = X.n->shape;
@@ -115,7 +111,7 @@ Variable BatchNorm2d::forward(const Variable& X) {
   });
 
   // backward
-  out->backward = [this, Xn = X.n, Gn = gamma.n, Bn = beta.n, xs, mean, inv_std, NHW,
+  out->backward = [C_=this->C, Xn = X.n, Gn = gamma.n, Bn = beta.n, xs, mean, inv_std, NHW,
                    oweak = std::weak_ptr<ag::Node>(out)]() {
     auto op = oweak.lock(); if (!op) return;
     ag::Node* o = op.get();
@@ -176,9 +172,9 @@ Variable BatchNorm2d::forward(const Variable& X) {
     // dX: two-pass per-channel
     if (Xn && Xn->requires_grad) {
       if (Xn->grad.size() != Xn->value.size()) Xn->grad.assign(Xn->value.size(), 0.0f);
-      std::vector<double> sum_dy(C, 0.0), sum_dy_xhat(C, 0.0);
+      std::vector<double> sum_dy(C_, 0.0), sum_dy_xhat(C_, 0.0);
       const std::size_t CHS_GRAIN = 1;
-      ag::parallel::parallel_for(C, CHS_GRAIN, [&](std::size_t c0, std::size_t c1){
+      ag::parallel::parallel_for(C_, CHS_GRAIN, [&](std::size_t c0, std::size_t c1){
         for (std::size_t c = c0; c < c1; ++c) {
           double sdy = 0.0, sdyx = 0.0;
           const float m = mean[c];
@@ -204,7 +200,7 @@ Variable BatchNorm2d::forward(const Variable& X) {
 
       // distribute
       const std::size_t CHD_GRAIN = 1;
-      ag::parallel::parallel_for(C, CHD_GRAIN, [&](std::size_t c0, std::size_t c1){
+      ag::parallel::parallel_for(C_, CHD_GRAIN, [&](std::size_t c0, std::size_t c1){
         for (std::size_t c = c0; c < c1; ++c) {
           const float m = mean[c];
           const float s = inv_std[c];

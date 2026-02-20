@@ -15,6 +15,9 @@ Variable Dropout::forward(const Variable& X) {
 
   if (p < 0.0 || p >= 1.0) throw std::invalid_argument("Dropout p must be in [0,1).");
 
+  // Use a different effective seed each call so masks vary across forward passes
+  const uint64_t effective_seed = seed ^ (++call_counter_ * 0x9E3779B97F4A7C15ull);
+
   auto out = std::make_shared<Node>();
   out->shape = X.n->shape;
   out->value.resize(numel(out->shape));
@@ -48,7 +51,7 @@ Variable Dropout::forward(const Variable& X) {
 
   if (bytes < CUTOFF_BYTES) {
     for (std::size_t i = 0; i < N; ++i) {
-      uint8_t m = bernoulli_bit(seed, i, keepf);
+      uint8_t m = bernoulli_bit(effective_seed, i, keepf);
       mask[i] = m;
       outp[i] = m ? xin[i] * scalef : 0.0f;
     }
@@ -56,7 +59,7 @@ Variable Dropout::forward(const Variable& X) {
     const std::size_t GRAIN = 1024;
     ag::parallel::parallel_for(N, GRAIN, [&](std::size_t i0, std::size_t i1){
       for (std::size_t i = i0; i < i1; ++i) {
-        uint8_t m = bernoulli_bit(seed, i, keepf);
+        uint8_t m = bernoulli_bit(effective_seed, i, keepf);
         mask[i] = m;
         outp[i] = m ? xin[i] * scalef : 0.0f;
       }

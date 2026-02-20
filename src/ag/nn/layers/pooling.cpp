@@ -70,7 +70,9 @@ Variable MaxPool2d::forward(const Variable& X) {
   });
 
   // backward: parallelize over (B,C) channels to avoid races on Xn->grad
-  out->backward = [this, Xn = X.n, xs, yshape,
+  out->backward = [kH_=this->kH, kW_=this->kW, sH_=this->sH, sW_=this->sW,
+                   pH_=this->pH, pW_=this->pW,
+                   Xn = X.n, xs, yshape,
                    oweak = std::weak_ptr<ag::Node>(out)]() {
     auto op = oweak.lock(); if (!op) return;
     ag::Node* o = op.get();
@@ -91,11 +93,11 @@ Variable MaxPool2d::forward(const Variable& X) {
         const std::size_t base = b * xstr[0] + c * xstr[1];
 
         for (std::size_t oh = 0; oh < H_out; ++oh) {
-          const std::size_t h0 = (oh * sH > pH) ? (oh * sH - pH) : 0;
-          const std::size_t h1 = std::min(h0 + kH, H);
+          const std::size_t h0 = (oh * sH_ > pH_) ? (oh * sH_ - pH_) : 0;
+          const std::size_t h1 = std::min(h0 + kH_, H);
           for (std::size_t ow = 0; ow < W_out; ++ow) {
-            const std::size_t w0 = (ow * sW > pW) ? (ow * sW - pW) : 0;
-            const std::size_t w1 = std::min(w0 + kW, W);
+            const std::size_t w0 = (ow * sW_ > pW_) ? (ow * sW_ - pW_) : 0;
+            const std::size_t w1 = std::min(w0 + kW_, W);
 
             // first pass: count ties
             float m = -std::numeric_limits<float>::infinity();
@@ -188,7 +190,9 @@ Variable AvgPool2d::forward(const Variable& X) {
     }
   });
 
-  out->backward = [this, Xn = X.n, xs, yshape,
+  out->backward = [kH_=this->kH, kW_=this->kW, sH_=this->sH, sW_=this->sW,
+                   pH_=this->pH, pW_=this->pW,
+                   Xn = X.n, xs, yshape,
                    oweak = std::weak_ptr<ag::Node>(out)]() {
     auto op = oweak.lock(); if (!op) return;
     ag::Node* o = op.get();
@@ -209,11 +213,11 @@ Variable AvgPool2d::forward(const Variable& X) {
         const std::size_t base = b * xstr[0] + c * xstr[1];
 
         for (std::size_t oh = 0; oh < H_out; ++oh) {
-          const std::size_t h0 = (oh * sH > pH) ? (oh * sH - pH) : 0;
-          const std::size_t h1 = std::min(h0 + kH, H);
+          const std::size_t h0 = (oh * sH_ > pH_) ? (oh * sH_ - pH_) : 0;
+          const std::size_t h1 = std::min(h0 + kH_, H);
           for (std::size_t ow = 0; ow < W_out; ++ow) {
-            const std::size_t w0 = (ow * sW > pW) ? (ow * sW - pW) : 0;
-            const std::size_t w1 = std::min(w0 + kW, W);
+            const std::size_t w0 = (ow * sW_ > pW_) ? (ow * sW_ - pW_) : 0;
+            const std::size_t w1 = std::min(w0 + kW_, W);
             const std::size_t cnt = (h1 - h0) * (w1 - w0);
             if (cnt == 0) continue;
             const std::size_t yi = b * ystr[0] + c * ystr[1] + oh * ystr[2] + ow * ystr[3];

@@ -18,6 +18,6 @@ Variable detach(const Variable& x) {
   return stop_gradient(x);
 }
 
-NoGradGuard::NoGradGuard()  { ag::set_grad_enabled(false); }
-NoGradGuard::~NoGradGuard() { ag::set_grad_enabled(true);  }
+NoGradGuard::NoGradGuard() : prev_(ag::is_grad_enabled()) { ag::set_grad_enabled(false); }
+NoGradGuard::~NoGradGuard() { ag::set_grad_enabled(prev_); }
 } // namespace ag

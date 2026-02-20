@@ -68,7 +68,8 @@ Variable at(const Variable& A, const std::vector<std::size_t>& begin, const std:
   if (req) {
     C.n->parents = { A.n };
     // Capture full shapes and begin so we can map reduced-output grads back into the input
-    C.n->backward = [An = A.n, Cn = C.n, Ash, OutSh_full, begin]() {
+    C.n->backward = [An = A.n, Cw = std::weak_ptr<Node>(C.n), Ash, OutSh_full, begin]() {
+      auto Cn = Cw.lock(); if (!Cn) return;
       if (An->grad.size() != An->value.size()) An->grad.assign(An->value.size(), 0.0f);
       const float* dC = Cn->grad.data();
       auto Astr = strides_for(Ash);

@@ -64,7 +64,7 @@ Variable cross_entropy(const Variable& logits, const std::vector<std::size_t>& t
         }
       }
     } else {
-      const std::size_t GRAIN = 1;
+      const std::size_t GRAIN = B;  // serialize: avoids thread-pool data race
       ag::parallel::parallel_for(B, GRAIN, [&](std::size_t b0, std::size_t b1){
         for (std::size_t b = b0; b < b1; ++b) {
           const float lse = static_cast<float>(LSEn->value[b]);
