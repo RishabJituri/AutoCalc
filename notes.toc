@@ -1,7 +1,7 @@
-\contentsline {part}{I\hspace {1em}Introduction}{4}{part.1}%
-\contentsline {chapter}{\numberline {1}What Is AutoCalc?}{5}{chapter.1}%
-\contentsline {section}{\numberline {1.1}Who This Document Is For}{5}{section.1.1}%
-\contentsline {section}{\numberline {1.2}Conventions}{5}{section.1.2}%
+\contentsline {part}{I\hspace {1em}Introduction}{5}{part.1}%
+\contentsline {chapter}{\numberline {1}What Is AutoCalc?}{6}{chapter.1}%
+\contentsline {section}{\numberline {1.1}Who This Document Is For}{6}{section.1.1}%
+\contentsline {section}{\numberline {1.2}Conventions}{6}{section.1.2}%
 \contentsline {chapter}{\numberline {2}Repository Layout}{7}{chapter.2}%
 \contentsline {part}{II\hspace {1em}The Autograd Core}{8}{part.2}%
 \contentsline {chapter}{\numberline {3}Automatic Differentiation: The Big Picture}{9}{chapter.3}%
@@ -68,7 +68,7 @@
 \contentsline {subsection}{\numberline {17.4.1}Algorithm}{37}{subsection.17.4.1}%
 \contentsline {subsection}{\numberline {17.4.2}Grain Size}{37}{subsection.17.4.2}%
 \contentsline {subsection}{\numberline {17.4.3}The Nesting Problem}{37}{subsection.17.4.3}%
-\contentsline {section}{\numberline {17.5}Configuration}{38}{section.17.5}%
+\contentsline {section}{\numberline {17.5}Configuration}{37}{section.17.5}%
 \contentsline {subsection}{\numberline {17.5.1}Determinism vs. Performance Trade-off}{38}{subsection.17.5.1}%
 \contentsline {part}{VI\hspace {1em}Data Loading}{39}{part.6}%
 \contentsline {chapter}{\numberline {18}Datasets, Examples, and DataLoader}{40}{chapter.18}%
@@ -97,4 +97,114 @@
 \contentsline {chapter}{\numberline {A}Complete Type Reference}{52}{appendix.A}%
 \contentsline {chapter}{\numberline {B}Operator Reference}{53}{appendix.B}%
 \contentsline {chapter}{\numberline {C}Key Design Patterns}{54}{appendix.C}%
-\contentsline {chapter}{\numberline {D}Glossary}{55}{appendix.D}%
+\contentsline {chapter}{\numberline {D}CPU Optimization Plan}{55}{appendix.D}%
+\contentsline {section}{\numberline {D.1}Executive Summary}{55}{section.D.1}%
+\contentsline {section}{\numberline {D.2}P0 --- Critical Optimizations}{56}{section.D.2}%
+\contentsline {subsection}{\numberline {D.2.1}O-1: Platform-SIMD GEMM Microkernel}{56}{subsection.D.2.1}%
+\contentsline {paragraph}{Current state.}{56}{section*.2}%
+\contentsline {paragraph}{Problem.}{57}{section*.3}%
+\contentsline {paragraph}{Proposed fix: compile-time dispatch via \texttt {\#ifdef}.}{57}{section*.4}%
+\contentsline {paragraph}{AArch64 kernel (NEON).}{57}{lstlisting.D.2}%
+\contentsline {paragraph}{x86-64 kernel (AVX2 + FMA).}{57}{section*.6}%
+\contentsline {paragraph}{x86-64 kernel (SSE2 fallback).}{58}{section*.7}%
+\contentsline {paragraph}{Register budget summary.}{58}{section*.8}%
+\contentsline {paragraph}{Build integration.}{58}{section*.9}%
+\contentsline {paragraph}{Expected speedup.}{58}{section*.10}%
+\contentsline {paragraph}{Dependencies.}{58}{section*.11}%
+\contentsline {subsection}{\numberline {D.2.2}O-2: Contiguous Fast-Path for Elementwise Ops}{58}{subsection.D.2.2}%
+\contentsline {paragraph}{Current state.}{58}{section*.12}%
+\contentsline {paragraph}{Problem.}{59}{section*.13}%
+\contentsline {paragraph}{Proposed fix.}{59}{section*.14}%
+\contentsline {paragraph}{Also add scalar-broadcast fast path.}{59}{section*.15}%
+\contentsline {paragraph}{Expected speedup.}{59}{section*.16}%
+\contentsline {paragraph}{Dependencies.}{59}{section*.17}%
+\contentsline {subsection}{\numberline {D.2.3}O-3: Conv2d Backward dX via im2col + GEMM}{59}{subsection.D.2.3}%
+\contentsline {paragraph}{Current state.}{59}{section*.18}%
+\contentsline {paragraph}{Problem.}{60}{section*.19}%
+\contentsline {paragraph}{Proposed fix.}{60}{section*.20}%
+\contentsline {paragraph}{Expected speedup.}{60}{section*.21}%
+\contentsline {paragraph}{Dependencies.}{60}{section*.22}%
+\contentsline {section}{\numberline {D.3}P1 --- High-Impact Optimizations}{60}{section.D.3}%
+\contentsline {subsection}{\numberline {D.3.1}O-4: Eliminate Variable/Node Allocation in Conv Forward}{60}{subsection.D.3.1}%
+\contentsline {paragraph}{Current state.}{60}{section*.23}%
+\contentsline {paragraph}{Problem.}{61}{section*.24}%
+\contentsline {paragraph}{Proposed fix.}{61}{section*.25}%
+\contentsline {paragraph}{Expected speedup.}{61}{section*.26}%
+\contentsline {paragraph}{Dependencies.}{61}{section*.27}%
+\contentsline {subsection}{\numberline {D.3.2}O-5: Pack-A Once per MC Panel}{61}{subsection.D.3.2}%
+\contentsline {paragraph}{Current state.}{61}{section*.28}%
+\contentsline {paragraph}{Problem.}{61}{section*.29}%
+\contentsline {paragraph}{Proposed fix.}{61}{section*.30}%
+\contentsline {paragraph}{Expected speedup.}{62}{section*.31}%
+\contentsline {paragraph}{Dependencies.}{62}{section*.32}%
+\contentsline {subsection}{\numberline {D.3.3}O-6: Conv2d Backward dW via Transposed GEMM}{62}{subsection.D.3.3}%
+\contentsline {paragraph}{Current state.}{62}{section*.33}%
+\contentsline {paragraph}{Proposed fix.}{62}{section*.34}%
+\contentsline {paragraph}{Expected speedup.}{62}{section*.35}%
+\contentsline {paragraph}{Dependencies.}{62}{section*.36}%
+\contentsline {subsection}{\numberline {D.3.4}O-7: Fused BatchNorm Forward + Backward}{62}{subsection.D.3.4}%
+\contentsline {paragraph}{Current state.}{62}{section*.37}%
+\contentsline {paragraph}{Proposed fix.}{63}{section*.38}%
+\contentsline {paragraph}{Expected speedup.}{63}{section*.39}%
+\contentsline {subsection}{\numberline {D.3.5}O-8: Cache Softmax from Forward in Cross-Entropy}{63}{subsection.D.3.5}%
+\contentsline {paragraph}{Current state.}{63}{section*.40}%
+\contentsline {paragraph}{Proposed fix.}{63}{section*.41}%
+\contentsline {paragraph}{Expected speedup.}{64}{section*.42}%
+\contentsline {subsection}{\numberline {D.3.6}O-9: Parallelize Conv2d Backward dX}{64}{subsection.D.3.6}%
+\contentsline {paragraph}{Current state.}{64}{section*.43}%
+\contentsline {paragraph}{Proposed fix.}{64}{section*.44}%
+\contentsline {paragraph}{Expected speedup.}{64}{section*.45}%
+\contentsline {section}{\numberline {D.4}P2 --- Medium-Impact Optimizations}{64}{section.D.4}%
+\contentsline {subsection}{\numberline {D.4.1}O-10: Portable Vectorized Elementwise Kernels}{64}{subsection.D.4.1}%
+\contentsline {paragraph}{Current state.}{64}{section*.46}%
+\contentsline {paragraph}{Proposed fix.}{64}{section*.47}%
+\contentsline {paragraph}{Expected speedup.}{65}{section*.48}%
+\contentsline {subsection}{\numberline {D.4.2}O-11: Thread-Pool Allocation Amortization}{65}{subsection.D.4.2}%
+\contentsline {paragraph}{Current state.}{65}{section*.49}%
+\contentsline {paragraph}{Proposed fix.}{65}{section*.50}%
+\contentsline {paragraph}{Expected speedup.}{65}{section*.51}%
+\contentsline {subsection}{\numberline {D.4.3}O-12: GEMM packB Reuse Across Row Tiles}{65}{subsection.D.4.3}%
+\contentsline {paragraph}{Current state.}{65}{section*.52}%
+\contentsline {paragraph}{Proposed fix.}{65}{section*.53}%
+\contentsline {paragraph}{Expected speedup.}{66}{section*.54}%
+\contentsline {subsection}{\numberline {D.4.4}O-13: Prefetch Insertion in GEMM Microkernel}{66}{subsection.D.4.4}%
+\contentsline {paragraph}{Current state.}{66}{section*.55}%
+\contentsline {paragraph}{Proposed fix.}{66}{section*.56}%
+\contentsline {paragraph}{Expected speedup.}{66}{section*.57}%
+\contentsline {subsection}{\numberline {D.4.5}O-14: Aligned Allocation for Tensor Storage}{66}{subsection.D.4.5}%
+\contentsline {paragraph}{Current state.}{66}{section*.58}%
+\contentsline {paragraph}{Proposed fix.}{66}{section*.59}%
+\contentsline {paragraph}{Expected speedup.}{66}{section*.60}%
+\contentsline {subsection}{\numberline {D.4.6}O-15: Cache \texttt {pick\_tiles\_runtime()} Result}{66}{subsection.D.4.6}%
+\contentsline {paragraph}{Current state.}{66}{section*.61}%
+\contentsline {paragraph}{Proposed fix.}{66}{section*.62}%
+\contentsline {paragraph}{Expected speedup.}{67}{section*.63}%
+\contentsline {section}{\numberline {D.5}P3 --- Long-Term / Architectural Optimizations}{67}{section.D.5}%
+\contentsline {subsection}{\numberline {D.5.1}O-16: Conv + BN + ReLU Operator Fusion}{67}{subsection.D.5.1}%
+\contentsline {paragraph}{Current state.}{67}{section*.64}%
+\contentsline {paragraph}{Proposed fix.}{67}{section*.65}%
+\contentsline {paragraph}{Expected speedup.}{67}{section*.66}%
+\contentsline {paragraph}{Dependencies.}{67}{section*.67}%
+\contentsline {subsection}{\numberline {D.5.2}O-17: Arena / Pool Allocator for Nodes and Tensors}{67}{subsection.D.5.2}%
+\contentsline {paragraph}{Current state.}{67}{section*.68}%
+\contentsline {paragraph}{Proposed fix.}{67}{section*.69}%
+\contentsline {paragraph}{Expected speedup.}{67}{section*.70}%
+\contentsline {subsection}{\numberline {D.5.3}O-18: Winograd $F(2\times 2, 3\times 3)$ Convolution}{67}{subsection.D.5.3}%
+\contentsline {paragraph}{Current state.}{67}{section*.71}%
+\contentsline {paragraph}{Proposed fix.}{68}{section*.72}%
+\contentsline {paragraph}{Expected speedup.}{68}{section*.73}%
+\contentsline {paragraph}{Dependencies.}{68}{section*.74}%
+\contentsline {subsection}{\numberline {D.5.4}O-19: Platform BLAS Dispatch (Accelerate / MKL / OpenBLAS)}{68}{subsection.D.5.4}%
+\contentsline {paragraph}{Current state.}{68}{section*.75}%
+\contentsline {paragraph}{Proposed fix.}{68}{section*.76}%
+\contentsline {paragraph}{Expected speedup.}{69}{section*.77}%
+\contentsline {paragraph}{Dependencies.}{69}{section*.78}%
+\contentsline {subsection}{\numberline {D.5.5}O-20: In-Place Gradient Accumulation \& Buffer Reuse}{69}{subsection.D.5.5}%
+\contentsline {paragraph}{Current state.}{69}{section*.79}%
+\contentsline {paragraph}{Proposed fix.}{69}{section*.80}%
+\contentsline {paragraph}{Expected speedup.}{70}{section*.81}%
+\contentsline {section}{\numberline {D.6}Implementation Roadmap}{70}{section.D.6}%
+\contentsline {paragraph}{Estimated cumulative speedup.}{70}{section*.82}%
+\contentsline {section}{\numberline {D.7}Profiling Methodology}{70}{section.D.7}%
+\contentsline {section}{\numberline {D.8}Summary of Findings}{71}{section.D.8}%
+\contentsline {chapter}{\numberline {E}Glossary}{72}{appendix.E}%

@@ -2,12 +2,12 @@
 \providecommand\hyper@newdestlabel[2]{}
 \providecommand\HyField@AuxAddToFields[1]{}
 \providecommand\HyField@AuxAddToCoFields[2]{}
-\@writefile{toc}{\contentsline {part}{I\hspace  {1em}Introduction}{4}{part.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {chapter}{\numberline {1}What Is AutoCalc?}{5}{chapter.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {part}{I\hspace  {1em}Introduction}{5}{part.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {chapter}{\numberline {1}What Is AutoCalc?}{6}{chapter.1}\protected@file@percent }
 \@writefile{lof}{\addvspace {10\p@ }}
 \@writefile{lot}{\addvspace {10\p@ }}
-\@writefile{toc}{\contentsline {section}{\numberline {1.1}Who This Document Is For}{5}{section.1.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {1.2}Conventions}{5}{section.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {1.1}Who This Document Is For}{6}{section.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {1.2}Conventions}{6}{section.1.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {chapter}{\numberline {2}Repository Layout}{7}{chapter.2}\protected@file@percent }
 \@writefile{lof}{\addvspace {10\p@ }}
 \@writefile{lot}{\addvspace {10\p@ }}
@@ -119,7 +119,7 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {17.4.1}Algorithm}{37}{subsection.17.4.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {17.4.2}Grain Size}{37}{subsection.17.4.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {17.4.3}The Nesting Problem}{37}{subsection.17.4.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {17.5}Configuration}{38}{section.17.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {17.5}Configuration}{37}{section.17.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {17.5.1}Determinism vs. Performance Trade-off}{38}{subsection.17.5.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {part}{VI\hspace  {1em}Data Loading}{39}{part.6}\protected@file@percent }
 \@writefile{toc}{\contentsline {chapter}{\numberline {18}Datasets, Examples, and DataLoader}{40}{chapter.18}\protected@file@percent }
@@ -176,7 +176,151 @@
 \@writefile{toc}{\contentsline {chapter}{\numberline {C}Key Design Patterns}{54}{appendix.C}\protected@file@percent }
 \@writefile{lof}{\addvspace {10\p@ }}
 \@writefile{lot}{\addvspace {10\p@ }}
-\@writefile{toc}{\contentsline {chapter}{\numberline {D}Glossary}{55}{appendix.D}\protected@file@percent }
+\@writefile{toc}{\contentsline {chapter}{\numberline {D}CPU Optimization Plan}{55}{appendix.D}\protected@file@percent }
 \@writefile{lof}{\addvspace {10\p@ }}
 \@writefile{lot}{\addvspace {10\p@ }}
-\gdef \@abspage@last{56}
+\newlabel{ch:optplan}{{D}{55}{CPU Optimization Plan}{appendix.D}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {D.1}Executive Summary}{55}{section.D.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {D.2}P0 --- Critical Optimizations}{56}{section.D.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.2.1}O-1: Platform-SIMD GEMM Microkernel}{56}{subsection.D.2.1}\protected@file@percent }
+\newlabel{sec:o1}{{D.2.1}{56}{O-1: Platform-SIMD GEMM Microkernel}{subsection.D.2.1}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{56}{section*.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Problem.}{57}{section*.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix: compile-time dispatch via \texttt  {\#ifdef}.}{57}{section*.4}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {D.1}Portable microkernel dispatch}{57}{lstlisting.D.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {D.2}NEON 8$\times $8 microkernel sketch}{57}{lstlisting.D.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{AArch64 kernel (NEON).}{57}{lstlisting.D.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{x86-64 kernel (AVX2 + FMA).}{57}{section*.6}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {D.3}AVX2 6$\times $16 microkernel sketch}{57}{lstlisting.D.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{x86-64 kernel (SSE2 fallback).}{58}{section*.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Register budget summary.}{58}{section*.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Build integration.}{58}{section*.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{58}{section*.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dependencies.}{58}{section*.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.2.2}O-2: Contiguous Fast-Path for Elementwise Ops}{58}{subsection.D.2.2}\protected@file@percent }
+\newlabel{sec:o2}{{D.2.2}{58}{O-2: Contiguous Fast-Path for Elementwise Ops}{subsection.D.2.2}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{58}{section*.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Problem.}{59}{section*.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{59}{section*.14}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {D.4}Contiguous same-shape fast path}{59}{lstlisting.D.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Also add scalar-broadcast fast path.}{59}{section*.15}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{59}{section*.16}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dependencies.}{59}{section*.17}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.2.3}O-3: Conv2d Backward dX via im2col + GEMM}{59}{subsection.D.2.3}\protected@file@percent }
+\newlabel{sec:o3}{{D.2.3}{59}{O-3: Conv2d Backward dX via im2col + GEMM}{subsection.D.2.3}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{59}{section*.18}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Problem.}{60}{section*.19}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{60}{section*.20}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {D.5}Conv2d dX via GEMM + col2im (sketch)}{60}{lstlisting.D.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{60}{section*.21}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dependencies.}{60}{section*.22}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {D.3}P1 --- High-Impact Optimizations}{60}{section.D.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.3.1}O-4: Eliminate Variable/Node Allocation in Conv Forward}{60}{subsection.D.3.1}\protected@file@percent }
+\newlabel{sec:o4}{{D.3.1}{60}{O-4: Eliminate Variable/Node Allocation in Conv Forward}{subsection.D.3.1}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{60}{section*.23}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Problem.}{61}{section*.24}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{61}{section*.25}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{61}{section*.26}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dependencies.}{61}{section*.27}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.3.2}O-5: Pack-A Once per MC Panel}{61}{subsection.D.3.2}\protected@file@percent }
+\newlabel{sec:o5}{{D.3.2}{61}{O-5: Pack-A Once per MC Panel}{subsection.D.3.2}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{61}{section*.28}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Problem.}{61}{section*.29}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{61}{section*.30}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{62}{section*.31}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dependencies.}{62}{section*.32}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.3.3}O-6: Conv2d Backward dW via Transposed GEMM}{62}{subsection.D.3.3}\protected@file@percent }
+\newlabel{sec:o6}{{D.3.3}{62}{O-6: Conv2d Backward dW via Transposed GEMM}{subsection.D.3.3}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{62}{section*.33}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{62}{section*.34}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{62}{section*.35}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dependencies.}{62}{section*.36}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.3.4}O-7: Fused BatchNorm Forward + Backward}{62}{subsection.D.3.4}\protected@file@percent }
+\newlabel{sec:o7}{{D.3.4}{62}{O-7: Fused BatchNorm Forward + Backward}{subsection.D.3.4}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{62}{section*.37}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{63}{section*.38}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {D.6}Fused BN backward single-pass reduction}{63}{lstlisting.D.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{63}{section*.39}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.3.5}O-8: Cache Softmax from Forward in Cross-Entropy}{63}{subsection.D.3.5}\protected@file@percent }
+\newlabel{sec:o8}{{D.3.5}{63}{O-8: Cache Softmax from Forward in Cross-Entropy}{subsection.D.3.5}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{63}{section*.40}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{63}{section*.41}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{64}{section*.42}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.3.6}O-9: Parallelize Conv2d Backward dX}{64}{subsection.D.3.6}\protected@file@percent }
+\newlabel{sec:o9}{{D.3.6}{64}{O-9: Parallelize Conv2d Backward dX}{subsection.D.3.6}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{64}{section*.43}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{64}{section*.44}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{64}{section*.45}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {D.4}P2 --- Medium-Impact Optimizations}{64}{section.D.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.4.1}O-10: Portable Vectorized Elementwise Kernels}{64}{subsection.D.4.1}\protected@file@percent }
+\newlabel{sec:o10}{{D.4.1}{64}{O-10: Portable Vectorized Elementwise Kernels}{subsection.D.4.1}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{64}{section*.46}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{64}{section*.47}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {D.7}Portable SIMD wrapper sketch}{64}{lstlisting.D.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{65}{section*.48}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.4.2}O-11: Thread-Pool Allocation Amortization}{65}{subsection.D.4.2}\protected@file@percent }
+\newlabel{sec:o11}{{D.4.2}{65}{O-11: Thread-Pool Allocation Amortization}{subsection.D.4.2}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{65}{section*.49}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{65}{section*.50}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{65}{section*.51}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.4.3}O-12: GEMM packB Reuse Across Row Tiles}{65}{subsection.D.4.3}\protected@file@percent }
+\newlabel{sec:o12}{{D.4.3}{65}{O-12: GEMM packB Reuse Across Row Tiles}{subsection.D.4.3}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{65}{section*.52}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{65}{section*.53}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{66}{section*.54}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.4.4}O-13: Prefetch Insertion in GEMM Microkernel}{66}{subsection.D.4.4}\protected@file@percent }
+\newlabel{sec:o13}{{D.4.4}{66}{O-13: Prefetch Insertion in GEMM Microkernel}{subsection.D.4.4}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{66}{section*.55}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{66}{section*.56}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{66}{section*.57}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.4.5}O-14: Aligned Allocation for Tensor Storage}{66}{subsection.D.4.5}\protected@file@percent }
+\newlabel{sec:o14}{{D.4.5}{66}{O-14: Aligned Allocation for Tensor Storage}{subsection.D.4.5}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{66}{section*.58}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{66}{section*.59}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{66}{section*.60}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.4.6}O-15: Cache \texttt  {pick\_tiles\_runtime()} Result}{66}{subsection.D.4.6}\protected@file@percent }
+\newlabel{sec:o15}{{D.4.6}{66}{O-15: Cache \texttt {pick\_tiles\_runtime()} Result}{subsection.D.4.6}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{66}{section*.61}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{66}{section*.62}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{67}{section*.63}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {D.5}P3 --- Long-Term / Architectural Optimizations}{67}{section.D.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.5.1}O-16: Conv + BN + ReLU Operator Fusion}{67}{subsection.D.5.1}\protected@file@percent }
+\newlabel{sec:o16}{{D.5.1}{67}{O-16: Conv + BN + ReLU Operator Fusion}{subsection.D.5.1}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{67}{section*.64}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{67}{section*.65}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{67}{section*.66}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dependencies.}{67}{section*.67}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.5.2}O-17: Arena / Pool Allocator for Nodes and Tensors}{67}{subsection.D.5.2}\protected@file@percent }
+\newlabel{sec:o17}{{D.5.2}{67}{O-17: Arena / Pool Allocator for Nodes and Tensors}{subsection.D.5.2}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{67}{section*.68}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{67}{section*.69}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{67}{section*.70}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.5.3}O-18: Winograd $F(2\times 2, 3\times 3)$ Convolution}{67}{subsection.D.5.3}\protected@file@percent }
+\newlabel{sec:o18}{{D.5.3}{67}{O-18: Winograd $F(2\times 2, 3\times 3)$ Convolution}{subsection.D.5.3}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{67}{section*.71}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{68}{section*.72}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{68}{section*.73}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dependencies.}{68}{section*.74}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.5.4}O-19: Platform BLAS Dispatch (Accelerate / MKL / OpenBLAS)}{68}{subsection.D.5.4}\protected@file@percent }
+\newlabel{sec:o19}{{D.5.4}{68}{O-19: Platform BLAS Dispatch (Accelerate / MKL / OpenBLAS)}{subsection.D.5.4}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{68}{section*.75}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{68}{section*.76}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {D.8}Platform BLAS dispatch}{68}{lstlisting.D.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{69}{section*.77}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dependencies.}{69}{section*.78}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.5.5}O-20: In-Place Gradient Accumulation \& Buffer Reuse}{69}{subsection.D.5.5}\protected@file@percent }
+\newlabel{sec:o20}{{D.5.5}{69}{O-20: In-Place Gradient Accumulation \& Buffer Reuse}{subsection.D.5.5}{}}
+\@writefile{toc}{\contentsline {paragraph}{Current state.}{69}{section*.79}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proposed fix.}{69}{section*.80}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Expected speedup.}{70}{section*.81}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {D.6}Implementation Roadmap}{70}{section.D.6}\protected@file@percent }
+\newlabel{sec:roadmap}{{D.6}{70}{Implementation Roadmap}{section.D.6}{}}
+\@writefile{toc}{\contentsline {paragraph}{Estimated cumulative speedup.}{70}{section*.82}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {D.7}Profiling Methodology}{70}{section.D.7}\protected@file@percent }
+\newlabel{sec:profmeth}{{D.7}{70}{Profiling Methodology}{section.D.7}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {D.8}Summary of Findings}{71}{section.D.8}\protected@file@percent }
+\newlabel{sec:optsummary}{{D.8}{71}{Summary of Findings}{section.D.8}{}}
+\@writefile{toc}{\contentsline {chapter}{\numberline {E}Glossary}{72}{appendix.E}\protected@file@percent }
+\@writefile{lof}{\addvspace {10\p@ }}
+\@writefile{lot}{\addvspace {10\p@ }}
+\gdef \@abspage@last{73}

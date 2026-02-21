@@ -1,0 +1,28 @@
+Dataset: MNIST  N=60000  bs=128  epochs=1  lr=0.1  momentum=0.9  wd=0.0001  seed=42
+AG initial   loss=2.4092  acc=0.0903
+  AG  ep 1/1  batch  100  loss=0.4669  acc=0.836
+  AG  ep 1/1  batch  200  loss=0.1243  acc=0.977
+  AG  ep 1/1  batch  300  loss=0.1051  acc=0.984
+  AG  ep 1/1  batch  400  loss=0.1170  acc=0.969
+AG  epoch 1/1  loss=0.3758  acc=0.8834  time=3681.0s
+AG final     loss=0.1664  acc=0.9515  total_time=3681.0s
+Torch initial  loss=2.3065  acc=0.0993
+  Torch  ep 1/1  batch  100  loss=0.4172  acc=0.875
+  Torch  ep 1/1  batch  200  loss=0.1861  acc=0.914
+  Torch  ep 1/1  batch  300  loss=0.0570  acc=0.984
+  Torch  ep 1/1  batch  400  loss=0.0920  acc=0.953
+Torch  epoch 1/1  loss=0.3464  acc=0.8910  time=385.8s
+Torch final  loss=0.2003  acc=0.9369  total_time=385.8s
+Params written to /Users/rishabjituri/Desktop/AutoCalc/results/resnet_demo/2026-02-20_174535/params.txt
+Plots saved to /Users/rishabjituri/Desktop/AutoCalc/results/resnet_demo/2026-02-20_174535
+Results written to /Users/rishabjituri/Desktop/AutoCalc/results/resnet_demo/2026-02-20_174535/results.json
+
+======================================================================
+                                AG         Torch
+----------------------------------------------------------------------
+         loss_before        2.4092        2.3065
+          loss_after        0.1664        0.2003
+          acc_before        0.0903        0.0993
+           acc_after        0.9515        0.9369
+              time_s        3681.0         385.8
+======================================================================

@@ -1,0 +1,2587 @@
+\documentclass[11pt,oneside]{book}
+\usepackage[margin=1in]{geometry}
+\usepackage{parskip}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{microtype}
+
+% ── Global spacing cleanup (reduce whitespace, improve consistency) ──
+% Keep parskip, but rein in excessive vertical space and normalize list/table/maths.
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45\baselineskip plus 0.15\baselineskip minus 0.10\baselineskip}
+
+% Display math spacing (the book class + parskip can get very airy)
+\setlength{\abovedisplayskip}{0.55\baselineskip}
+\setlength{\belowdisplayskip}{0.55\baselineskip}
+\setlength{\abovedisplayshortskip}{0.35\baselineskip}
+\setlength{\belowdisplayshortskip}{0.35\baselineskip}
+
+% Lists: tighten itemize/enumerate/description spacing consistently
+\setlist[itemize]{topsep=0.35\baselineskip, itemsep=0.15\baselineskip, parsep=0pt, partopsep=0pt}
+\setlist[enumerate]{topsep=0.35\baselineskip, itemsep=0.15\baselineskip, parsep=0pt, partopsep=0pt}
+\setlist[description]{topsep=0.35\baselineskip, itemsep=0.15\baselineskip, parsep=0pt, partopsep=0pt}
+
+% Tables: remove extra vertical padding
+\renewcommand{\arraystretch}{1.05}
+\setlength{\tabcolsep}{5pt}
+
+% Code listings: slightly tighter around listings
+\lstset{
+  aboveskip=0.55\baselineskip,
+  belowskip=0.55\baselineskip,
+  % ...existing lstset options...
+}
+
+% tcolorbox: reduce extra vertical padding around hint boxes
+\tcbset{before skip=0.6\baselineskip, after skip=0.6\baselineskip, boxsep=1.5mm}
+
+% ── Code listing style ──────────────────────────────────────────────
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codeframe}{RGB}{200,200,200}
+\definecolor{kw}{RGB}{0,0,180}
+\definecolor{str}{RGB}{163,21,21}
+\definecolor{cmt}{RGB}{0,128,0}
+\lstset{
+  language=C++,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{kw}\bfseries,
+  stringstyle=\color{str},
+  commentstyle=\color{cmt}\itshape,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  showstringspaces=false,
+  tabsize=2,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  xleftmargin=2em,
+  framexleftmargin=1.5em,
+}
+
+% ── Hint boxes ──────────────────────────────────────────────────────
+\newtcolorbox{keyidea}{colback=blue!5!white, colframe=blue!50!black,
+  title=Key Idea, fonttitle=\bfseries}
+\newtcolorbox{warning}{colback=red!5!white, colframe=red!50!black,
+  title=Warning, fonttitle=\bfseries}
+
+\pagestyle{fancy}
+\fancyhead[L]{\leftmark}
+\fancyhead[R]{AutoCalc}
+\fancyfoot[C]{\thepage}
+
+\title{\Huge\bfseries AutoCalc\\[0.5em]
+  \Large A From-Scratch Autograd Engine in C++\\with Python Bindings}
+\author{Documentation \& System Design Guide}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+% ════════════════════════════════════════════════════════════════════
+\part{Introduction}
+% ════════════════════════════════════════════════════════════════════
+
+\chapter{What Is AutoCalc?}
+
+AutoCalc is a complete, from-scratch machine-learning framework written in C++17.
+It contains:
+
+\begin{itemize}
+  \item An \textbf{automatic differentiation} (autograd) engine that can compute
+        gradients of arbitrary compositions of mathematical operations.
+  \item A \textbf{neural-network module system} (layers, loss functions, optimizers)
+        similar in spirit to PyTorch's \texttt{torch.nn}.
+  \item A hand-written \textbf{SGEMM kernel} (single-precision general matrix
+        multiply) with cache-aware tiling and multithreading.
+  \item A \textbf{thread pool and parallel-for} runtime for data-parallel computation.
+  \item \textbf{Python bindings} via pybind11 so the entire engine can be used from
+        Python scripts.
+  \item \textbf{Data loading} utilities (datasets, data loaders, transforms) that
+        mirror PyTorch's \texttt{torch.utils.data}.
+\end{itemize}
+
+The project is designed to be \emph{educational}: every component is written from
+scratch so you can see exactly how a modern ML framework works under the hood.
+
+\section{Who This Document Is For}
+
+This guide is written for someone who:
+\begin{itemize}
+  \item May not have written C++ before (we explain every C++ idiom we encounter).
+  \item May not be familiar with machine learning math (we derive the key formulas).
+  \item Wants to understand \emph{system design}: why the code is structured the way
+        it is, what trade-offs were made, and what bugs were found and fixed.
+\end{itemize}
+
+\section{Conventions}
+
+\begin{itemize}
+  \item \texttt{monospace} denotes code: file names, function names, types.
+  \item ``Shape'' means the dimensions of a tensor, e.g.\ \texttt{[B, C, H, W]}
+        for a batch of images with B samples, C channels, height H, width W.
+  \item We use 0-based indexing everywhere (as C++ does).
+  \item ``Leaf'' means a node with no parents in the computation graph (typically
+        a learnable parameter or input data).
+\end{itemize}
+
+% ════════════════════════════════════════════════════════════════════
+\chapter{Repository Layout}
+
+\begin{tabular}{ll}
+\toprule
+\textbf{Path} & \textbf{Purpose} \\
+\midrule
+\texttt{include/ag/core/}     & Core autograd: \texttt{Node}, \texttt{Variable} \\
+\texttt{include/ag/ops/}      & Operator declarations (elementwise, linalg, etc.) \\
+\texttt{include/ag/nn/}       & Neural-network module system (layers, loss, optimizer) \\
+\texttt{include/ag/parallel/} & Thread pool, parallel\_for, configuration \\
+\texttt{include/ag/data/}     & Dataset, DataLoader, transforms \\
+\texttt{include/ag/sys/}      & System queries (cache sizes) \\
+\texttt{src/ag/}              & Corresponding \texttt{.cpp} implementations \\
+\texttt{bindings/}            & pybind11 C++$\to$Python bridge \\
+\texttt{ag/}                  & Python package shim (\texttt{\_\_init\_\_.py}) \\
+\texttt{c\_tests/}            & C++ unit tests \\
+\texttt{pytests/}             & Python test suite \\
+\texttt{c\_demos/}            & C++ demo programs (MNIST, ResNet, LSTM) \\
+\texttt{py\_demos/}           & Python demo scripts \\
+\texttt{CMakeLists.txt}       & Build system \\
+\bottomrule
+\end{tabular}
+
+\begin{keyidea}
+In C++ projects, \textbf{headers} (\texttt{.hpp}) declare interfaces (types,
+function signatures), while \textbf{source files} (\texttt{.cpp}) contain
+implementations. Headers live in \texttt{include/} so other translation units
+can \texttt{\#include} them; sources live in \texttt{src/}.
+\end{keyidea}
+
+% ════════════════════════════════════════════════════════════════════
+\part{The Autograd Core}
+% ════════════════════════════════════════════════════════════════════
+
+\chapter{Automatic Differentiation: The Big Picture}
+
+\section{What Problem Does Autograd Solve?}
+
+Training a neural network requires computing \emph{gradients}: partial
+derivatives of a scalar loss $L$ with respect to every learnable parameter
+$\theta_i$.  The chain rule of calculus lets us decompose this:
+\[
+  \frac{\partial L}{\partial \theta_i}
+  = \frac{\partial L}{\partial z_n}
+    \cdot \frac{\partial z_n}{\partial z_{n-1}}
+    \cdots
+    \frac{\partial z_2}{\partial z_1}
+    \cdot \frac{\partial z_1}{\partial \theta_i}
+\]
+where $z_1, z_2, \ldots, z_n$ are intermediate results.
+Computing this by hand for every network architecture would be tedious and
+error-prone.
+
+\textbf{Reverse-mode automatic differentiation} (``backpropagation'') automates
+this.  The idea:
+\begin{enumerate}
+  \item \textbf{Forward pass}: evaluate the function, recording every operation
+        in a directed acyclic graph (DAG).
+  \item \textbf{Backward pass}: walk the DAG in reverse topological order,
+        applying the chain rule at each node to accumulate gradients.
+\end{enumerate}
+
+\section{Why Reverse Mode?}
+
+There are two modes of AD:
+\begin{itemize}
+  \item \textbf{Forward mode}: propagates derivatives \emph{forward} through the
+        graph.  Cost scales with the number of \emph{inputs} (parameters).
+  \item \textbf{Reverse mode}: propagates derivatives \emph{backward} from the
+        output.  Cost scales with the number of \emph{outputs}.
+\end{itemize}
+In ML, we have one scalar output (the loss) and millions of parameters, so
+reverse mode is dramatically cheaper.
+
+% ════════════════════════════════════════════════════════════════════
+\chapter{Node and Variable}
+
+These two types are the heart of AutoCalc.  Every tensor in the system is
+represented by a \texttt{Variable}, which is a thin wrapper around a
+heap-allocated \texttt{Node}.
+
+\section{The Node Struct}
+
+Defined in \texttt{include/ag/core/variables.hpp}:
+
+\begin{lstlisting}[caption={Node struct (simplified)}]
+struct Node {
+  std::vector<float> value;   // the tensor data, flattened
+  std::vector<float> grad;    // gradient, same size
+  std::vector<std::size_t> shape; // e.g. {2, 3} for a 2x3 matrix
+
+  bool requires_grad = false;
+
+  std::vector<std::shared_ptr<Node>> parents; // inputs to this op
+  std::function<void()> backward;             // the local VJP
+};
+\end{lstlisting}
+
+Let us unpack each field:
+
+\begin{description}[style=nextline]
+  \item[\texttt{value}]
+    A flat \texttt{std::vector<float>} storing the tensor elements in
+    \textbf{row-major} order.  A shape \texttt{\{2,3\}} matrix
+    $\begin{pmatrix}a&b&c\\d&e&f\end{pmatrix}$ is stored as
+    \texttt{[a, b, c, d, e, f]}.
+
+  \item[\texttt{grad}]
+    Same layout as \texttt{value}, but holds $\partial L / \partial
+    \text{this\_tensor}$.  Initialized to zeros; accumulated during backward.
+
+  \item[\texttt{shape}]
+    A vector of dimension sizes.  \texttt{numel(shape)} = product of all
+    entries = length of \texttt{value}.
+
+  \item[\texttt{requires\_grad}]
+    If \texttt{false}, gradient will not be computed for this node.
+    Input data tensors are typically \texttt{requires\_grad=false}; learnable
+    parameters are \texttt{true}.
+
+  \item[\texttt{parents}]
+    Pointers to the input nodes of whatever operation created this node.
+    For a leaf (parameter or data), this is empty.
+
+  \item[\texttt{backward}]
+    A \texttt{std::function<void()>} closure that implements the
+    \emph{vector-Jacobian product} (VJP) for the operation that created this
+    node.  When called, it reads \texttt{this->grad} (the upstream gradient)
+    and accumulates into each parent's \texttt{grad}.
+\end{description}
+
+\begin{keyidea}
+A \texttt{std::shared\_ptr<T>} is a C++ smart pointer that automatically
+frees the object when the last pointer to it is destroyed.  Multiple
+\texttt{shared\_ptr}s can point to the same object; an internal reference count
+tracks how many exist.  This is how AutoCalc manages the lifetime of Nodes:
+when no Variable or parent list references a Node, it is freed.
+\end{keyidea}
+
+\section{The Variable Class}
+
+\begin{lstlisting}[caption={Variable class (simplified)}]
+class Variable {
+public:
+  std::shared_ptr<Node> n;  // the wrapped node
+
+  Variable();  // creates an empty node
+  Variable(const std::vector<float>& value,
+           const std::vector<std::size_t>& shape,
+           bool requires_grad = true);
+
+  void backward();             // scalar loss -> seed=1
+  void backward(const std::vector<float>& seed);
+  void zero_grad();            // zero grads in entire subgraph
+};
+\end{lstlisting}
+
+\texttt{Variable} is a \emph{value type} that holds a \texttt{shared\_ptr} to
+the actual data.  Copying a \texttt{Variable} is cheap: it just increments the
+reference count.  This means that when an operator returns a new
+\texttt{Variable}, the caller gets a lightweight handle, not a copy of the
+tensor data.
+
+\section{Grad Mode and NoGradGuard}
+
+A global thread-local boolean controls whether new nodes get
+\texttt{requires\_grad=true}:
+
+\begin{lstlisting}
+inline thread_local bool __grad_enabled = true;
+inline bool is_grad_enabled() { return __grad_enabled; }
+inline void set_grad_enabled(bool v) { __grad_enabled = v; }
+\end{lstlisting}
+
+\texttt{NoGradGuard} is an RAII object that temporarily disables grad:
+\begin{lstlisting}
+struct NoGradGuard {
+  bool prev_;
+  NoGradGuard()  { prev_ = is_grad_enabled(); set_grad_enabled(false); }
+  ~NoGradGuard() { set_grad_enabled(prev_); }
+};
+\end{lstlisting}
+
+\begin{keyidea}
+\textbf{RAII} (Resource Acquisition Is Initialization) is a C++ pattern where
+a constructor acquires a resource and the destructor releases it.  Because C++
+guarantees destructors run when an object goes out of scope (even via
+exceptions), RAII ensures resources are always released.  Here, the ``resource''
+is the grad-disabled state.
+\end{keyidea}
+
+% ════════════════════════════════════════════════════════════════════
+\chapter{The Backward Pass}
+
+\section{Topological Sort}
+
+Before running backward, we need the nodes in an order where every node's
+parents are processed \emph{before} the node itself (so gradients flow
+correctly from output to inputs).  This is a \textbf{topological sort} of
+the DAG.
+
+AutoCalc uses a recursive DFS:
+
+\begin{lstlisting}[caption={Topological collection}]
+void topo_collect(const shared_ptr<Node>& node,
+                  vector<shared_ptr<Node>>& order,
+                  unordered_set<Node*>& seen) {
+  if (!node || seen.count(node.get())) return;
+  seen.insert(node.get());
+  for (auto& p : node->parents)
+    topo_collect(p, order, seen);
+  order.push_back(node);  // parents first, then self
+}
+\end{lstlisting}
+
+After collection, \texttt{order} has parents before children.  We iterate in
+\emph{reverse} to get the backward order (children before parents):
+
+\begin{lstlisting}[caption={Backward loop}]
+void Variable::backward(const vector<float>& seed) {
+  vector<shared_ptr<Node>> order;
+  unordered_set<Node*> seen;
+  topo_collect(n, order, seen);
+
+  // Seed the output gradient
+  for (size_t i = 0; i < seed.size(); ++i)
+    n->grad[i] += seed[i];
+
+  // Reverse iterate: output -> inputs
+  for (auto it = order.rbegin(); it != order.rend(); ++it) {
+    if ((*it)->backward) (*it)->backward();
+  }
+}
+\end{lstlisting}
+
+\section{Post-Backward Cleanup}
+
+After the backward pass completes, intermediate nodes (non-leaf) have their
+\texttt{backward} closure and \texttt{parents} list cleared:
+
+\begin{lstlisting}[caption={Graph cleanup after backward}]
+for (auto& node : order) {
+  if (node->parents.empty()) continue; // leaf -- keep alive
+  node->backward = nullptr;
+  node->parents.clear();
+}
+\end{lstlisting}
+
+This is \textbf{critical} for memory management.  Without it, the backward
+closures hold \texttt{shared\_ptr}s to parent nodes, forming reference cycles
+that prevent garbage collection.  Over many training iterations, this causes
+unbounded memory growth (the OOM bug that was fixed---see Part~\ref{part:memory}).
+
+\section{zero\_grad}
+
+Before each training step, gradients from the previous step must be reset
+to zero.  \texttt{zero\_grad()} does a topological walk from the loss node
+and sets every reachable node's \texttt{grad} vector to all zeros.
+
+% ════════════════════════════════════════════════════════════════════
+\part{The Operator Library}
+% ════════════════════════════════════════════════════════════════════
+
+\chapter{Tensor Utilities}
+
+\texttt{include/ag/ops/tensor\_utils.hpp} provides fundamental helpers:
+
+\begin{description}
+  \item[\texttt{numel(shape)}] Returns the product of all dimensions
+    (total number of elements).
+  \item[\texttt{strides\_for(shape)}] Computes row-major strides.  For shape
+    $\{d_0, d_1, \ldots, d_{n-1}\}$, stride $s_i = \prod_{j=i+1}^{n-1} d_j$.
+  \item[\texttt{ravel\_index(idx, strides)}] Converts a multi-dimensional index
+    to a flat offset: $\sum_i \text{idx}[i] \times \text{strides}[i]$.
+  \item[\texttt{unravel\_index(linear, shape)}] Inverse of ravel: converts a flat
+    offset back to multi-dimensional indices.
+  \item[\texttt{broadcast\_two(A, B)}] NumPy-style broadcasting: right-aligns
+    shapes, pads with 1s, and checks compatibility (dimensions must match or
+    one must be 1).
+\end{description}
+
+% ════════════════════════════════════════════════════════════════════
+\chapter{Elementwise Operations}
+
+\texttt{src/ag/ops/ops\_elmwise.cpp} implements addition, subtraction,
+multiplication, division, negation, sin, cos, exp, and power.
+
+\section{Pattern: How an Op Is Built}
+
+Every operator follows the same pattern.  Let us trace \texttt{add} as the
+canonical example:
+
+\begin{enumerate}
+  \item \textbf{Compute output shape} via broadcasting.
+  \item \textbf{Allocate output Node}: set shape, value, grad, parents.
+  \item \textbf{Forward compute}: loop over output elements, map each to the
+        corresponding input elements (handling broadcasting), compute the result.
+  \item \textbf{Attach backward closure}: a lambda that, when called, reads
+        \texttt{out->grad} and accumulates into \texttt{A.n->grad} and
+        \texttt{B.n->grad} according to the local Jacobian.
+  \item \textbf{Return} a \texttt{Variable} wrapping the output node.
+\end{enumerate}
+
+\subsection{Forward}
+
+For \texttt{add(A, B)}, the forward is simply:
+\[
+  \text{out}[i] = A[\text{map}(i)] + B[\text{map}(i)]
+\]
+where \texttt{map} handles broadcasting (mapping an output index to the
+corresponding input index, collapsing broadcast dimensions to index 0).
+
+\subsection{Backward}
+
+For addition, $\partial(\text{out})/\partial A = 1$ and
+$\partial(\text{out})/\partial B = 1$, so:
+\[
+  \frac{\partial L}{\partial A[j]} \mathrel{+}= \sum_{i:\,\text{map}(i)=j}
+  \frac{\partial L}{\partial \text{out}[i]}
+\]
+The sum handles broadcast: if $A$ had a dimension of size 1 that was broadcast
+to size $n$, the gradient contributions from all $n$ output positions are
+summed back into that single input element.
+
+\subsection{Parallelism}
+
+When the output has more than 4096 elements (\texttt{ELEM\_SERIAL\_CUTOFF}),
+the forward and backward loops are parallelized using \texttt{parallel\_for}
+with a grain size of 1024 elements per task.
+
+\section{Multiplication Backward}
+
+For $\text{out} = A \cdot B$:
+\[
+  \frac{\partial L}{\partial A[j]} \mathrel{+}= \sum_{i:\,\text{map}(i)=j}
+  \frac{\partial L}{\partial \text{out}[i]} \cdot B[\text{map}_B(i)]
+\]
+and symmetrically for $B$.  The forward values of the \emph{other} input are
+needed during backward---this is why intermediate values must be kept alive
+until backward completes.
+
+\section{Other Elementwise Ops}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Op} & \textbf{Forward} & \textbf{$\partial/\partial x$} \\
+\midrule
+\texttt{neg(x)}   & $-x$        & $-1$ \\
+\texttt{sinv(x)}  & $\sin(x)$   & $\cos(x)$ \\
+\texttt{cosv(x)}  & $\cos(x)$   & $-\sin(x)$ \\
+\texttt{expv(x)}  & $e^x$       & $e^x$ \\
+\texttt{pow(x,p)} & $x^p$       & $p \cdot x^{p-1}$ (w.r.t.\ $x$) \\
+\texttt{div(a,b)} & $a/b$       & $1/b$ (w.r.t.\ $a$), $-a/b^2$ (w.r.t.\ $b$) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ════════════════════════════════════════════════════════════════════
+\chapter{Activations}
+
+\texttt{src/ag/ops/activations.cpp} provides:
+
+\begin{description}
+  \item[\texttt{relu(x)}] $\max(0, x)$.  Backward: gradient is passed through
+    where $x > 0$, zeroed where $x \le 0$.
+  \item[\texttt{logsumexp(x, axes, keepdims)}] Numerically stable:
+    $\text{LSE}(x) = m + \log\sum_i \exp(x_i - m)$ where $m = \max(x)$.
+    Used in cross-entropy loss.
+\end{description}
+
+% ════════════════════════════════════════════════════════════════════
+\chapter{Reduction Operations}
+
+\texttt{src/ag/ops/reduce.cpp} implements \texttt{sum} and \texttt{mean} along
+specified axes (with optional keepdims).
+
+\textbf{Sum backward}: gradient is broadcast back to the input shape.  If we
+summed axis 1 of a $[3,4]$ tensor to get $[3]$, each gradient element is
+copied to all 4 positions along axis 1.
+
+\textbf{Mean backward}: same as sum, but divided by the number of elements
+that were averaged.
+
+% ════════════════════════════════════════════════════════════════════
+\chapter{Linear Algebra: Matmul and Transpose}
+
+\section{Matrix Multiplication}
+
+\texttt{matmul(A, B)} computes $C = A \times B$ where $A$ is $[\ldots, M, K]$
+and $B$ is $[\ldots, K, N]$, producing $C$ of shape $[\ldots, M, N]$.
+Batch dimensions are broadcast.
+
+\subsection{Forward}
+
+The core computation calls \texttt{sgemm\_f32} (our custom GEMM kernel,
+described in Part~\ref{part:sgemm}).  For batched inputs, the batch
+dimensions are iterated and a separate GEMM is dispatched per batch element.
+
+\subsection{Backward}
+
+The gradients for matrix multiplication follow from the chain rule:
+\begin{align}
+  \frac{\partial L}{\partial A} &= \frac{\partial L}{\partial C} \cdot B^T
+  & &\text{(shape: $[M,N] \times [N,K] = [M,K]$)} \\
+  \frac{\partial L}{\partial B} &= A^T \cdot \frac{\partial L}{\partial C}
+  & &\text{(shape: $[K,M] \times [M,N] = [K,N]$)}
+\end{align}
+
+\subsection{The weak\_ptr Fix}
+
+The backward closure originally captured \texttt{C.n} (a \texttt{shared\_ptr})
+by value.  Since \texttt{C.n->backward} \emph{is} that closure, this created a
+reference cycle: the Node's backward lambda owned a \texttt{shared\_ptr} to
+the Node itself.  The fix: capture a \texttt{std::weak\_ptr} instead, and
+\texttt{lock()} it at the start of the backward call.  See
+Part~\ref{part:memory} for the full story.
+
+\section{Transpose}
+
+\texttt{transpose(A)} swaps the last two dimensions of a tensor, producing a
+new tensor with copied data.  For a $[\ldots, M, N]$ input, the output is
+$[\ldots, N, M]$.
+
+Backward: transposing the gradient is its own inverse, so we transpose the
+incoming gradient back.
+
+\section{Slicing: \texttt{at(A, begin, end)}}
+
+Extracts a contiguous sub-tensor.  \texttt{begin} and \texttt{end} are
+per-dimension half-open ranges.
+
+Backward: the gradient is scattered back into the corresponding positions
+of the input's gradient tensor (with zeros elsewhere).
+
+% ════════════════════════════════════════════════════════════════════
+\part{The Neural Network Module System}
+% ════════════════════════════════════════════════════════════════════
+
+\chapter{Module Base Class}
+
+\texttt{include/ag/nn/module.hpp} defines the abstract base:
+
+\begin{lstlisting}[caption={Module interface (key members)}]
+class Module {
+public:
+  virtual Variable forward(const Variable& x) = 0;
+
+  vector<Variable*> parameters();      // recursive collection
+  void zero_grad();
+  void train();
+  void eval();
+
+  Module& register_module(Module& child);
+  Module& register_parameter(const string& name, Variable& v);
+
+protected:
+  virtual vector<Variable*> _parameters() = 0; // own params only
+};
+\end{lstlisting}
+
+\subsection{Parameter Collection}
+
+\texttt{parameters()} is recursive: it calls \texttt{\_parameters()} on
+\texttt{this} module to get its own parameters, then recurses into every
+registered child module.  This is how the optimizer discovers all learnable
+weights in a model.
+
+\subsection{Train vs.\ Eval Mode}
+
+\texttt{train()} and \texttt{eval()} set a boolean flag that affects layers
+like BatchNorm (which uses running stats in eval mode) and Dropout (which is
+disabled in eval mode).
+
+% ════════════════════════════════════════════════════════════════════
+\chapter{Sequential}
+
+\begin{lstlisting}[caption={Sequential container}]
+struct Sequential : Module {
+  vector<shared_ptr<Module>> layers;
+
+  void push(shared_ptr<Module> m) {
+    register_module(m);
+    layers.push_back(move(m));
+  }
+
+  Variable forward(const Variable& x) override {
+    Variable y = x;
+    for (auto& m : layers) y = m->forward(y);
+    return y;
+  }
+};
+\end{lstlisting}
+
+\texttt{Sequential} chains layers: the output of one is the input of the next.
+It has no parameters of its own; all parameters come from the contained layers.
+
+% ════════════════════════════════════════════════════════════════════
+\chapter{Layers}
+
+\section{Linear (Fully Connected)}
+
+\texttt{Linear(in, out)} holds:
+\begin{itemize}
+  \item Weight $W$: shape $[\text{in}, \text{out}]$
+  \item Bias $b$: shape $[\text{out}]$ (optional)
+\end{itemize}
+
+Forward: $y = x W + b$ where $x$ is $[B, \text{in}]$.  The bias is broadcast
+across the batch dimension.
+
+\section{Conv2d (2D Convolution)}
+
+\texttt{Conv2d(Cin, Cout, kernel, stride, padding, dilation)} implements
+convolution via the \textbf{im2col} approach.
+
+\subsection{What Is Convolution?}
+
+A 2D convolution slides a small \emph{kernel} (filter) over a 2D input image
+and computes a weighted sum at each position.  If the input has $C_\text{in}$
+channels and the kernel is $K_H \times K_W$, then at each output position
+$(oh, ow)$ the operation reads a \emph{patch} of size
+$C_\text{in} \times K_H \times K_W$ from the input and dot-products it with
+the kernel weights.  With $C_\text{out}$ different kernels, we get
+$C_\text{out}$ output channels.
+
+The output spatial dimensions are:
+\[
+  H_\text{out} = 1 + \frac{H + 2P_H - D_H(K_H - 1) - 1}{S_H}, \qquad
+  W_\text{out} = 1 + \frac{W + 2P_W - D_W(K_W - 1) - 1}{S_W}
+\]
+where $P$ is padding, $S$ is stride, and $D$ is dilation (spacing between
+kernel elements).
+
+\subsection{The im2col Trick: Why and How}
+
+A naive convolution loops over every output position and every kernel element
+inside a 6-deep nested loop.  This is slow because:
+\begin{itemize}
+  \item The memory access pattern is irregular (strided reads from the input).
+  \item The compiler cannot vectorize the inner loops well.
+  \item We cannot reuse highly optimized GEMM kernels.
+\end{itemize}
+
+\textbf{im2col} (image-to-column) transforms the problem so that the entire
+convolution becomes a single matrix multiplication:
+
+\begin{enumerate}
+  \item \textbf{Reshape the weight tensor} from $[C_\text{out}, C_\text{in}, K_H, K_W]$
+    into a 2D matrix $W_\text{col}$ of shape $[K, C_\text{out}]$, where
+    $K = C_\text{in} \times K_H \times K_W$.  Each column of $W_\text{col}$
+    contains one output filter flattened into a vector.
+
+  \item \textbf{Build the im2col matrix.}  For each output position $(b, oh, ow)$
+    in the batch, we extract the corresponding input patch of size $K$ and lay it
+    out as a \emph{row} of a large matrix $X_\text{col}$ of shape
+    $[\text{rows}, K]$, where $\text{rows} = B \times H_\text{out} \times W_\text{out}$.
+
+    Concretely, for output position $(oh, ow)$, the patch covers input positions:
+    \[
+      \text{ih} = oh \cdot S_H - P_H + kh \cdot D_H, \qquad
+      \text{iw} = ow \cdot S_W - P_W + kw \cdot D_W
+    \]
+    for $kh \in [0, K_H)$, $kw \in [0, K_W)$, across all $C_\text{in}$ channels.
+    If $(\text{ih}, \text{iw})$ falls outside the input bounds, we use zero
+    (this is how zero-padding works).
+
+  \item \textbf{Multiply}: $Y_\text{col} = X_\text{col} \times W_\text{col}$,
+    producing shape $[\text{rows}, C_\text{out}]$.
+
+  \item \textbf{Reshape and add bias}: scatter the rows of $Y_\text{col}$ back
+    into the $[B, C_\text{out}, H_\text{out}, W_\text{out}]$ output tensor, then
+    add the bias (broadcast over spatial dimensions).
+\end{enumerate}
+
+\begin{keyidea}
+\textbf{im2col} is the standard trick used by most deep learning frameworks
+(including cuDNN) to implement convolution efficiently.  By rearranging input
+patches into matrix columns, we convert convolution into GEMM, which has
+decades of optimization behind it.  The trade-off is memory: the im2col matrix
+has redundant copies of overlapping input elements.
+\end{keyidea}
+
+\subsection{Concrete Example}
+
+Consider a $1 \times 1 \times 4 \times 4$ input (1 batch, 1 channel, $4
+\times 4$) with a $3 \times 3$ kernel, stride 1, no padding:
+
+\begin{itemize}
+  \item Output size: $H_\text{out} = 1 + (4 - 3)/1 = 2$, $W_\text{out} = 2$.
+  \item $K = 1 \times 3 \times 3 = 9$.
+  \item im2col matrix: $4$ rows $\times$ $9$ columns.  Each row is one
+    flattened $3 \times 3$ patch from the input.
+  \item Weight matrix: $9 \times C_\text{out}$.
+  \item One GEMM call: $[4, 9] \times [9, C_\text{out}] = [4, C_\text{out}]$.
+\end{itemize}
+
+\subsection{Blocked im2col in AutoCalc}
+
+Building the full im2col matrix for a large input can consume significant
+memory.  AutoCalc mitigates this by processing rows in \textbf{blocks} of
+size \texttt{ROW\_BLOCK} (default 256, matching the GEMM \texttt{MC} tile):
+
+\begin{lstlisting}[caption={Blocked im2col + GEMM (simplified)}]
+for each block of ROW_BLOCK rows:
+  1. Build im2col_block: [ROW_BLOCK, K]  (small buffer)
+  2. GEMM:  im2col_block * W_col -> Y_block: [ROW_BLOCK, Cout]
+  3. Scatter Y_block into output tensor
+\end{lstlisting}
+
+These blocks are processed in parallel via \texttt{parallel\_for}, so
+different threads handle different spatial regions simultaneously.
+
+\subsection{Backward Pass}
+
+The backward for Conv2d computes two gradients:
+\begin{itemize}
+  \item $\nabla W$: for each output position, the gradient contribution is the
+    outer product of the upstream gradient and the corresponding im2col row.
+    This is again a GEMM: $X_\text{col}^T \times \nabla Y_\text{col}$.
+  \item $\nabla X$: the upstream gradient is multiplied by the transposed weight
+    matrix ($\nabla Y_\text{col} \times W_\text{col}^T$), then scattered back
+    to the input positions using the reverse of the im2col index mapping
+    (``col2im'').
+\end{itemize}
+
+\section{BatchNorm2d}
+
+Batch normalization over NCHW tensors.  Per channel $c$:
+
+\textbf{Training mode}:
+\begin{align}
+  \mu_c &= \frac{1}{N \cdot H \cdot W}\sum_{n,h,w} x_{n,c,h,w} \\
+  \sigma_c^2 &= \frac{1}{N \cdot H \cdot W}\sum_{n,h,w}(x_{n,c,h,w} - \mu_c)^2 \\
+  \hat{x}_{n,c,h,w} &= \frac{x_{n,c,h,w} - \mu_c}{\sqrt{\sigma_c^2 + \epsilon}} \\
+  y_{n,c,h,w} &= \gamma_c \hat{x}_{n,c,h,w} + \beta_c
+\end{align}
+
+Running statistics are updated with exponential moving average:
+\[
+  \bar{\mu} \leftarrow (1 - m)\bar{\mu} + m \cdot \mu_c
+\]
+
+\textbf{Eval mode}: uses running mean and variance instead of batch statistics.
+
+The mean and variance are computed using \textbf{Welford's online algorithm},
+which is numerically more stable than the naive two-pass approach.
+
+Learnable parameters: $\gamma$ (scale) and $\beta$ (shift), each of shape $[C]$.
+
+\section{MaxPool2d and AvgPool2d}
+
+\texttt{MaxPool2d(kernel, stride, padding)} slides a window over each
+channel and takes the maximum.  Backward: gradient flows only to the position
+that achieved the max (``argmax routing'').
+
+\texttt{AvgPool2d} takes the mean instead.  Backward: gradient is divided
+equally among all positions in the window.
+
+\section{Dropout}
+
+During training, each element is independently zeroed with probability $p$,
+and surviving elements are scaled by $1/(1-p)$ to preserve the expected value.
+
+The random mask is generated using \textbf{SplitMix64}, a fast non-cryptographic
+PRNG.  The seed incorporates a \texttt{call\_counter} that increments each
+forward call, ensuring different masks each time.
+
+During eval mode, Dropout is a no-op (identity function).
+
+\section{LSTM}
+
+Long Short-Term Memory.  Implements the standard LSTM cell equations:
+\begin{align}
+  f_t &= \sigma(W_f [h_{t-1}, x_t] + b_f) & \text{(forget gate)} \\
+  i_t &= \sigma(W_i [h_{t-1}, x_t] + b_i) & \text{(input gate)} \\
+  \tilde{c}_t &= \tanh(W_c [h_{t-1}, x_t] + b_c) & \text{(candidate)} \\
+  c_t &= f_t \odot c_{t-1} + i_t \odot \tilde{c}_t & \text{(cell state)} \\
+  o_t &= \sigma(W_o [h_{t-1}, x_t] + b_o) & \text{(output gate)} \\
+  h_t &= o_t \odot \tanh(c_t) & \text{(hidden state)}
+\end{align}
+
+% ════════════════════════════════════════════════════════════════════
+\chapter{Loss Functions}
+
+\section{Cross-Entropy Loss}
+
+\texttt{cross\_entropy(logits, targets)} computes:
+\[
+  L = \frac{1}{B}\sum_{b=1}^B \left[\text{LSE}(\mathbf{x}_b) - x_{b, t_b}\right]
+\]
+where $\text{LSE}(\mathbf{x}) = \log\sum_c \exp(x_c)$ and $t_b$ is the target
+class for sample $b$.
+
+\textbf{Backward}: the gradient with respect to logit $x_{b,c}$ is:
+\[
+  \frac{\partial L}{\partial x_{b,c}} = \frac{1}{B}\left(\text{softmax}(x_b)_c
+  - \mathbf{1}[c = t_b]\right)
+\]
+This is the classic ``softmax minus one-hot'' gradient.
+
+% ════════════════════════════════════════════════════════════════════
+\chapter{SGD Optimizer}
+
+\texttt{SGD} implements stochastic gradient descent with optional momentum,
+Nesterov acceleration, and weight decay:
+
+\begin{lstlisting}[caption={SGD step (pseudocode)}]
+for each parameter p:
+  g = p.grad
+  if weight_decay > 0:
+    g += weight_decay * p.value  // L2 regularization
+  if momentum > 0:
+    v = momentum * v_prev + g
+    if nesterov:
+      update = g + momentum * v
+    else:
+      update = v
+  else:
+    update = g
+  p.value -= lr * update
+\end{lstlisting}
+
+Velocity vectors are stored per-parameter (keyed by \texttt{Node*} identity)
+in an \texttt{unordered\_map}.
+
+% ════════════════════════════════════════════════════════════════════
+\part{The SGEMM Kernel and Parallelism}
+\label{part:sgemm}
+% ════════════════════════════════════════════════════════════════════
+
+\chapter{Why a Custom SGEMM?}
+
+Matrix multiplication is the computational bottleneck of neural networks.
+Rather than linking an external BLAS library, AutoCalc implements its own
+single-precision GEMM (\texttt{sgemm\_f32}) to demonstrate how high-performance
+linear algebra works from first principles.
+
+\section{The Memory Hierarchy Problem}
+
+Modern CPUs can perform floating-point arithmetic orders of magnitude faster
+than they can fetch data from main memory.  A naive triple-loop matmul
+($O(MNK)$ multiply-adds) spends most of its time waiting for memory.
+
+The solution is \textbf{tiling} (also called blocking): break the matrices into
+small blocks that fit in the CPU's fast caches, and reuse each loaded block as
+many times as possible.
+
+\section{Tiling Strategy}
+
+AutoCalc uses a three-level tiling scheme:
+
+\begin{enumerate}
+  \item \textbf{NC $\times$ KC} panels of $B$ are packed into a contiguous buffer
+    that fits in L2 cache.
+  \item \textbf{MC $\times$ KC} panels of $A$ are packed into a buffer that fits
+    in L1 cache.
+  \item \textbf{MR $\times$ NR} micro-tiles (8$\times$8 in AutoCalc) are computed
+    by a tight inner kernel that maximizes register reuse.
+\end{enumerate}
+
+The tile sizes are chosen at runtime based on detected cache sizes:
+
+\begin{lstlisting}[caption={Runtime tile selection}]
+GemmTiles pick_tiles_runtime(size_t sizeofT) {
+  auto ci = cache_info();  // L1d and L2 sizes in bytes
+  int KC = L1 / (2 * NR * sizeofT);    // B panel fits half of L1
+  int NC = 0.6 * L2 / (KC * sizeofT);  // B macro-panel fits 60% L2
+  int MC = 0.5 * L2 / (T * KC * sizeofT); // A per-thread stripe
+  // ... clamp and round to MR/NR multiples ...
+}
+\end{lstlisting}
+
+\section{The 8$\times$8 Micro-Kernel}
+
+The innermost computation is an 8$\times$8 outer-product accumulation:
+
+\begin{lstlisting}[caption={Micro-kernel (scalar, unrolled)}]
+void microkernel_8x8_f32(const float* Ap, const float* Bp,
+                         float* C, int ldc, int kc) {
+  float acc[8][8] = {{0}};
+  for (int p = 0; p < kc; ++p) {
+    // Load 8 elements of A and 8 elements of B
+    // Compute all 64 products (8*8 FMAs)
+    // ... fully unrolled ...
+  }
+  // Write acc back to C
+}
+\end{lstlisting}
+
+This is a \textbf{rank-1 update} kernel: at each step $p$, we compute the
+outer product of an 8-element column of $A$ with an 8-element row of $B$ and
+accumulate into the 8$\times$8 register tile.
+
+\section{Packing}
+
+Before the micro-kernel runs, matrix panels are ``packed'' into contiguous
+buffers with a specific layout:
+\begin{itemize}
+  \item \texttt{packA}: rearranges an $(\text{mc} \times \text{kc})$ panel of $A$
+    into MR-wide strips, padded with zeros.
+  \item \texttt{packB}: rearranges a $(\text{kc} \times \text{nc})$ panel of $B$
+    into NR-wide strips, padded with zeros.
+\end{itemize}
+
+Packing ensures sequential memory access in the micro-kernel, which is essential
+for cache line utilization.
+
+\section{Transpose-Aware Overload}
+
+A second overload of \texttt{sgemm\_f32} accepts \texttt{Trans::N} or
+\texttt{Trans::T} flags for each input.  Instead of materializing transposed
+copies, it uses stride-aware packing functions (\texttt{packA\_f32\_strided},
+\texttt{packB\_f32\_strided}) that read the source matrix with swapped
+row/column strides.
+
+% ════════════════════════════════════════════════════════════════════
+\chapter{Thread Pool and parallel\_for}
+
+\section{Why a Custom Thread Pool?}
+
+Many operations in a neural network (elementwise ops on large tensors, GEMM
+tile dispatch, im2col construction) are embarrassingly parallel.  Creating a
+new \texttt{std::thread} per task would be far too expensive---thread creation
+on Linux/macOS takes $\sim$50\,$\mu$s, while the work per task may be only a
+few microseconds.  A \textbf{persistent thread pool} creates workers once and
+reuses them for the lifetime of the process.
+
+\section{Thread Pool Architecture}
+
+\texttt{include/ag/parallel/pool.hpp} implements the pool as a class
+\texttt{ThreadPool} with the following components:
+
+\begin{description}[style=nextline]
+  \item[Worker threads (\texttt{workers\_})]
+    A \texttt{std::vector<std::thread>} created lazily on first use.  The
+    default count equals \texttt{std::thread::hardware\_concurrency()} (i.e.,
+    the number of CPU cores), but can be overridden via the \texttt{AG\_NUM\_THREADS}
+    environment variable or \texttt{set\_max\_threads()}.  Workers run a
+    \texttt{worker\_loop()} that sleeps until work arrives.
+
+  \item[Task queue (\texttt{tasks\_})]
+    A \texttt{std::deque<RangeTask>} where each task is a struct holding
+    a \texttt{std::function<void(size\_t, size\_t)>} plus a \texttt{begin}
+    and \texttt{end} range.  Protected by a \texttt{std::mutex}.
+
+  \item[Condition variable (\texttt{cv\_})]
+    Workers block on \texttt{cv\_.wait()} when the queue is empty.
+    \texttt{submit()} calls \texttt{cv\_.notify\_one()} to wake exactly one
+    sleeping worker.
+
+  \item[Inflight counter (\texttt{inflight\_})]
+    An \texttt{std::atomic<size\_t>} incremented on submit, decremented when
+    a worker finishes a task.  When it reaches zero, the
+    \texttt{done\_cv\_} condition variable is signaled.
+
+  \item[Wait mechanism (\texttt{done\_cv\_})]
+    The caller of \texttt{wait\_for\_all()} blocks on \texttt{done\_cv\_} until
+    \texttt{inflight\_} is zero.  This is how \texttt{parallel\_for} waits for
+    all chunks to finish.
+
+  \item[Exception propagation (\texttt{first\_exc\_})]
+    If any worker catches an exception, it is stored in \texttt{first\_exc\_}
+    and the remaining queued tasks are drained.  \texttt{wait()} then rethrows
+    the exception on the calling thread.
+\end{description}
+
+\begin{lstlisting}[caption={Worker loop (simplified)}]
+void worker_loop() noexcept {
+  for (;;) {
+    RangeTask task;
+    {
+      unique_lock lk(mu_);
+      cv_.wait(lk, [&]{ return stop_ || !tasks_.empty(); });
+      if (stop_ && tasks_.empty()) return;
+      task = move(tasks_.front());
+      tasks_.pop_front();
+    }
+    try {
+      nesting_flag() = true;  // prevent nested parallel_for
+      task.fn(task.begin, task.end);
+    } catch (...) {
+      capture_exception(current_exception());
+    }
+    nesting_flag() = false;
+    complete_one();  // decrement inflight_
+  }
+}
+\end{lstlisting}
+
+\begin{keyidea}
+The pool is a \textbf{Meyer's singleton}: \texttt{pool()} returns a reference
+to a function-local static \texttt{ThreadPool} object, which is constructed
+on first call and destroyed at program exit.  This avoids the ``static
+initialization order fiasco'' (a classic C++ pitfall where global objects
+constructed in different translation units have undefined initialization order).
+\end{keyidea}
+
+\section{Thread-Local Storage (TLS)}
+
+Several components use \texttt{thread\_local} variables for per-thread state
+without synchronization overhead:
+
+\begin{itemize}
+  \item \texttt{tls\_worker\_id}: each pool thread gets a unique integer ID
+    (0, 1, \ldots), used to index per-thread scratch buffers in the GEMM kernel.
+  \item \texttt{nesting\_flag()}: a boolean that is \texttt{true} when executing
+    inside a pool worker.  \texttt{parallel\_for} checks this to avoid
+    deadlock from nested parallelism.
+  \item \texttt{thread\_local std::vector<float> Ap\_buf}: per-thread packing
+    buffers in the GEMM kernel, reused across calls to avoid allocation overhead.
+\end{itemize}
+
+\begin{keyidea}
+\texttt{thread\_local} is a C++11 storage class that gives each thread its
+own independent copy of a variable.  Unlike a global variable (shared by all
+threads, requiring locks), or a local variable (created/destroyed each function
+call), a \texttt{thread\_local} variable is created once per thread and persists
+for that thread's lifetime.  It combines the performance of a global with the
+safety of thread isolation.
+\end{keyidea}
+
+\section{parallel\_for}
+
+\texttt{parallel\_for(n, grain, body)} is the high-level API.  It divides the
+half-open range $[0, n)$ into chunks and dispatches them to the pool.
+
+\subsection{Algorithm}
+
+\begin{enumerate}
+  \item \textbf{Compute thread cap $T$}: $\min(\texttt{get\_max\_threads()}, n)$.
+  \item \textbf{Check serial gates}: if $T = 1$, or $n = 0$, or
+    \texttt{serial\_override()} returns true (see below), run
+    \texttt{body(0, n)} directly and return.
+  \item \textbf{Determine chunk count}:
+    \begin{itemize}
+      \item If grain $= 0$ (auto): use $T$ chunks.
+      \item Otherwise: $\text{chunks} = \min(T, \lceil n / \text{grain}\rceil)$.
+    \end{itemize}
+  \item \textbf{Divide work evenly}: $q = n / \text{chunks}$, $r = n \bmod
+    \text{chunks}$.  The first $r$ chunks get $q+1$ elements, the rest get $q$.
+    This ensures perfectly balanced loads (at most 1 element difference).
+  \item \textbf{Submit all chunks} via \texttt{submit\_range()}.
+  \item \textbf{Wait}: call \texttt{wait\_for\_all()}, which blocks until
+    \texttt{inflight\_} reaches 0.
+  \item \textbf{Rethrow}: if any chunk threw an exception, rethrow it.
+\end{enumerate}
+
+\subsection{Grain Size}
+
+The \textbf{grain} parameter controls the minimum amount of work per task.
+Setting it too small creates excessive task overhead (mutex contention,
+function call overhead); too large wastes cores.  Typical values in AutoCalc:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Use site} & \textbf{Grain} \\
+\midrule
+Elementwise ops (\texttt{add}, \texttt{mul}, \ldots) & 1024 elements \\
+GEMM tile dispatch & 0 (auto: one chunk per thread) \\
+Conv2d im2col blocks & 1 block per task \\
+Cross-entropy backward & $B$ (serialize: avoids data race) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{The Nesting Problem}
+
+Consider: \texttt{parallel\_for} dispatches work to 8 threads.  Inside
+each chunk, the code calls \texttt{matmul}, which itself calls
+\texttt{parallel\_for}.  If the inner call also submits to the same pool,
+we deadlock: the outer chunks are waiting for pool workers, but those workers
+are blocked waiting for inner tasks that will never execute (all workers are
+busy with outer tasks).
+
+AutoCalc prevents this with a \textbf{nesting guard}: each pool worker sets
+\texttt{nesting\_flag() = true} before executing a task.
+\texttt{serial\_override()} checks this flag and returns \texttt{true},
+causing the inner \texttt{parallel\_for} to run serially on the current
+worker thread.
+
+\section{Configuration}
+
+\texttt{include/ag/parallel/config.hpp} provides the unified control layer:
+
+\begin{description}[style=nextline]
+  \item[\texttt{get\_max\_threads()} / \texttt{set\_max\_threads(n)}]
+    A global \texttt{std::atomic<size\_t>} thread cap.  Defaults to
+    \texttt{hardware\_concurrency()}, overridable by the \texttt{AG\_THREADS}
+    environment variable.  Setting to 1 forces all parallelism off.
+
+  \item[\texttt{ScopedSerial}]
+    An RAII guard with a TLS depth counter.  While active, all
+    \texttt{parallel\_for} calls run serially.  Used in tests for
+    reproducibility.
+
+  \item[\texttt{deterministic\_enabled()} / \texttt{AG\_DETERMINISTIC}]
+    When true, floating-point operations must be order-deterministic.
+    Since parallel reduction can sum in different orders (yielding different
+    rounding), this mode forces serial execution by default.
+
+  \item[\texttt{ScopedDeterministicParallel}]
+    An opt-in escape hatch: code that is parallel \emph{and} deterministic
+    by construction (e.g., GEMM where each tile writes to disjoint output
+    locations) wraps itself in this guard.  When active, parallel execution
+    is allowed even under \texttt{AG\_DETERMINISTIC=1}.
+
+  \item[\texttt{serial\_override()}]
+    The unified gate checked by \texttt{parallel\_for}.  Returns \texttt{true}
+    if \emph{any} of:
+    \begin{itemize}
+      \item \texttt{ScopedSerial} is active
+      \item We are inside a pool worker (nesting)
+      \item Deterministic mode is on and \texttt{ScopedDeterministicParallel} is
+        \emph{not} active
+      \item \texttt{max\_threads} $\le 1$
+    \end{itemize}
+\end{description}
+
+\subsection{Determinism vs. Performance Trade-off}
+
+Floating-point addition is not associative: $(a + b) + c \neq a + (b + c)$
+in general due to rounding.  When multiple threads accumulate into the same
+gradient buffer with different chunking boundaries, the final result depends
+on thread scheduling---making training non-reproducible.
+
+AutoCalc's solution: backward passes that accumulate into shared buffers use
+\texttt{ScopedDeterministicParallel} or serialize entirely (e.g.,
+cross-entropy sets grain $= B$ to force one chunk).  Operations where each
+thread writes to \emph{disjoint} output locations (like GEMM, where each tile
+owns its own $C$ block) can safely parallelize even in deterministic mode.
+
+% ════════════════════════════════════════════════════════════════════
+\part{Data Loading}
+% ════════════════════════════════════════════════════════════════════
+
+\chapter{Datasets, Examples, and DataLoader}
+
+\section{Dataset and Example}
+
+\begin{lstlisting}[caption={Dataset interface}]
+struct Example {
+  Variable x;  // input sample
+  Variable y;  // label / target
+};
+
+struct Dataset {
+  virtual ~Dataset() = default;
+  virtual size_t size() const = 0;
+  virtual Example get(size_t index) const = 0;
+};
+\end{lstlisting}
+
+A \texttt{Dataset} is an abstract interface: you implement \texttt{size()} and
+\texttt{get(i)} to return individual samples.
+
+\section{DataLoader}
+
+\texttt{DataLoader} wraps a \texttt{Dataset} and provides batched iteration:
+
+\begin{itemize}
+  \item \texttt{batch\_size}: number of samples per batch.
+  \item \texttt{shuffle}: whether to randomize sample order each epoch.
+  \item \texttt{drop\_last}: whether to discard the final incomplete batch.
+\end{itemize}
+
+Each call to \texttt{next()} collates the next \texttt{batch\_size} samples
+into a single \texttt{Batch} (with a leading batch dimension) using the
+\texttt{collate()} function, which stacks samples along a new axis 0.
+
+\section{Transforms}
+
+\texttt{include/ag/data/transforms.hpp} provides image preprocessing:
+\begin{itemize}
+  \item \texttt{Normalize(mean, std)}: $x \to (x - \mu) / \sigma$
+  \item \texttt{Flatten}: reshapes spatial dims to a single vector
+\end{itemize}
+
+% ════════════════════════════════════════════════════════════════════
+\part{Python Bindings}
+% ════════════════════════════════════════════════════════════════════
+
+\chapter{pybind11 Architecture}
+
+AutoCalc's Python interface is built with \textbf{pybind11}, a header-only
+library that generates CPython extension modules from C++ code.
+
+\section{Binding Files}
+
+\begin{description}
+  \item[\texttt{bindings/variable.cpp}] The main module definition
+    (\texttt{PYBIND11\_MODULE(\_backend, m)}).  Binds \texttt{Variable},
+    all operators (\texttt{add}, \texttt{matmul}, \texttt{relu}, etc.),
+    grad mode functions, the \texttt{nograd} context manager, and the
+    \texttt{live\_node\_count()} diagnostic.
+
+  \item[\texttt{bindings/nn.cpp}] Binds the neural network classes:
+    \texttt{Linear}, \texttt{Conv2d}, \texttt{BatchNorm2d}, \texttt{Sequential},
+    loss functions, and \texttt{SGD}.
+
+  \item[\texttt{bindings/data.cpp}] Binds \texttt{DataLoader},
+    \texttt{DataLoaderOptions}, and dataset helpers (including a concrete
+    \texttt{MNISTDataset} class).
+\end{description}
+
+\section{The Python Package Shim}
+
+\texttt{ag/\_\_init\_\_.py} re-exports everything from the compiled
+\texttt{\_backend} extension:
+
+\begin{lstlisting}[language=Python, caption={ag/\_\_init\_\_.py (simplified)}]
+from ag._backend import *
+from ag._backend import nn, data
+# Also re-exports: live_node_count, nograd, Variable, ...
+\end{lstlisting}
+
+A CMake \texttt{POST\_BUILD} command copies this file into the build directory
+so that \texttt{PYTHONPATH=build/python} makes \texttt{import ag} work correctly.
+
+\begin{warning}
+Without the \texttt{\_\_init\_\_.py} copy, Python treats \texttt{build/python/ag/}
+as a \emph{namespace package} (PEP 420) and silently skips the re-exports.
+This was a real bug that was fixed by adding the \texttt{POST\_BUILD} copy
+command to CMakeLists.txt.
+\end{warning}
+
+% ════════════════════════════════════════════════════════════════════
+\part{Build System}
+% ════════════════════════════════════════════════════════════════════
+
+\chapter{CMake Configuration}
+
+The project uses CMake $\ge$ 3.20 with C++17.
+
+\section{Key Targets}
+
+\begin{description}
+  \item[\texttt{autocalc\_lib}] Static library containing all \texttt{src/ag/}
+    sources.  Built with \texttt{POSITION\_INDEPENDENT\_CODE ON} so it can be
+    linked into the shared Python module.
+  \item[\texttt{ag\_python}] The pybind11 module (\texttt{\_backend.so}).
+    Links \texttt{autocalc\_lib} and \texttt{pybind11::module}.
+  \item[\texttt{tests}] C++ test executable (sanitized, debug flags).
+  \item[\texttt{fast\_mnist}] / \texttt{fast\_resnet} / \texttt{fast\_lstm}]:
+    Optimized demo executables.
+\end{description}
+
+\section{Compile Flags}
+
+The Python extension and core library are built with aggressive optimization:
+\begin{itemize}
+  \item \texttt{-O3}: maximum optimization level.
+  \item \texttt{-ffast-math}: allows the compiler to reorder floating-point
+    operations, use approximate reciprocals, and assume no NaN/Inf.  This can
+    yield 10--30\% speedups for compute-bound code.
+  \item \texttt{-fno-finite-math-only}: re-enables proper NaN/Inf handling
+    (a subset of \texttt{-ffast-math} that's dangerous to leave on for
+    numerical code like logsumexp).
+  \item \texttt{-mcpu=native}: tune instruction selection for the build machine's
+    CPU (e.g., Apple M-series NEON instructions).
+  \item \texttt{-DNDEBUG}: disables \texttt{assert()} checks.
+\end{itemize}
+
+The test executable uses \texttt{-O0 -g -fsanitize=address,undefined} for
+maximum debuggability.
+
+% ════════════════════════════════════════════════════════════════════
+\part{Memory Management and the OOM Fix}
+\label{part:memory}
+% ════════════════════════════════════════════════════════════════════
+
+\chapter{The shared\_ptr Ownership Model}
+
+Every \texttt{Node} is heap-allocated and managed by \texttt{std::shared\_ptr}.
+When an operator creates an output node, it stores \texttt{shared\_ptr}s to its
+input nodes in the \texttt{parents} vector.  This keeps inputs alive as long
+as the output exists (which is necessary because backward needs to read their
+values).
+
+The user holds a \texttt{Variable} (which contains a \texttt{shared\_ptr<Node>})
+for the loss.  The loss node points to its parents, which point to their
+parents, and so on---forming a tree of shared ownership that keeps the entire
+computation graph alive.
+
+\chapter{The Reference Cycle Bug}
+
+\section{The Problem}
+
+Consider the backward closure for matmul.  Originally:
+
+\begin{lstlisting}[caption={Buggy backward closure (creates cycle)}]
+C.n->backward = [An = A.n, Bn = B.n, Cn = C.n, ...] () {
+  // Cn->grad is the upstream gradient
+  // Uses Cn to read the gradient
+  ...
+};
+\end{lstlisting}
+
+The closure captures \texttt{Cn = C.n}, a \texttt{shared\_ptr<Node>} to the
+output node.  But \texttt{C.n->backward} \emph{is} this closure.  So:
+
+\begin{itemize}
+  \item \texttt{C.n} owns \texttt{C.n->backward} (the closure is stored in the Node)
+  \item \texttt{C.n->backward} owns \texttt{Cn} (captured \texttt{shared\_ptr})
+  \item \texttt{Cn} points to \texttt{C.n} (same object!)
+\end{itemize}
+
+This is a \textbf{reference cycle}.  Even when the user drops their
+\texttt{Variable}, the reference count of the Node never reaches zero because
+the closure still holds a reference.  The Node is leaked.
+
+This happened in three places: \texttt{matmul}, \texttt{transpose}, and
+\texttt{at(begin,end)}.
+
+\section{The Symptom}
+
+When training on MNIST with $n = 60{,}000$ samples, each forward pass creates
+thousands of intermediate nodes.  Without cleanup, these nodes accumulate
+across training steps.  After a few hundred steps, the process exceeds
+available memory and is killed by the OS (exit code 137 / SIGKILL).
+
+\chapter{The Fix}
+
+\section{Fix 1: weak\_ptr in Closures}
+
+Replace \texttt{shared\_ptr} self-capture with \texttt{weak\_ptr}:
+
+\begin{lstlisting}[caption={Fixed backward closure}]
+std::weak_ptr<Node> Cw = C.n;  // weak reference
+C.n->backward = [An = A.n, Bn = B.n, Cw, ...] () {
+  auto Cn = Cw.lock();  // try to promote to shared_ptr
+  if (!Cn) return;       // node already freed
+  // ... use Cn->grad safely ...
+};
+\end{lstlisting}
+
+A \texttt{weak\_ptr} observes a \texttt{shared\_ptr}-managed object without
+contributing to the reference count.  \texttt{lock()} returns a valid
+\texttt{shared\_ptr} if the object still exists, or \texttt{nullptr} if it
+has been freed.
+
+\section{Fix 2: Post-Backward Cleanup}
+
+Even with the \texttt{weak\_ptr} fix, intermediate nodes would stay alive
+(via the parent pointers) until the next forward pass.  To eagerly free them:
+
+\begin{lstlisting}[caption={Post-backward cleanup}]
+// After running all backward closures:
+for (auto& node : order) {
+  if (node->parents.empty()) continue; // leaf
+  node->backward = nullptr;  // drop closure
+  node->parents.clear();     // drop parent refs
+}
+\end{lstlisting}
+
+This breaks all remaining references from non-leaf nodes, allowing the
+entire intermediate graph to be freed immediately after backward.
+
+\section{Verified Results}
+
+After both fixes, training on $n = 60{,}000$ MNIST samples:
+\begin{itemize}
+  \item RSS stays flat at $\sim$300 MB (was growing unboundedly).
+  \item Loss decreases from $\sim$2.3 to $\sim$0.33 in one epoch.
+  \item No OOM kill.
+\end{itemize}
+
+\chapter{Leak Detection Infrastructure}
+
+A global atomic counter tracks live Node objects:
+
+\begin{lstlisting}[caption={Node counter}]
+inline std::atomic<int64_t> g_live_node_count{0};
+
+struct Node {
+  Node()  { g_live_node_count.fetch_add(1); }
+  ~Node() { g_live_node_count.fetch_sub(1); }
+  // ... copy/move deleted ...
+};
+\end{lstlisting}
+
+This is exposed to Python as \texttt{ag.live\_node\_count()}, enabling test
+assertions like:
+
+\begin{lstlisting}[language=Python, caption={Leak detection test}]
+before = ag.live_node_count()
+# ... run forward + backward ...
+gc.collect()
+after = ag.live_node_count()
+assert after <= before + small_tolerance
+\end{lstlisting}
+
+% ════════════════════════════════════════════════════════════════════
+\part{Appendices}
+% ════════════════════════════════════════════════════════════════════
+
+\appendix
+
+\chapter{Complete Type Reference}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Type} & \textbf{Header} & \textbf{Role} \\
+\midrule
+\texttt{Node}          & \texttt{core/variables.hpp} & DAG node (value + grad + backward) \\
+\texttt{Variable}      & \texttt{core/variables.hpp} & User-facing tensor handle \\
+\texttt{Module}        & \texttt{nn/module.hpp}      & Abstract NN layer \\
+\texttt{Sequential}    & \texttt{nn/sequential.hpp}  & Layer container \\
+\texttt{Linear}        & \texttt{nn/layers/linear.hpp} & Fully connected layer \\
+\texttt{Conv2d}        & \texttt{nn/layers/conv2d.hpp} & 2D convolution \\
+\texttt{BatchNorm2d}   & \texttt{nn/layers/normalization.hpp} & Batch normalization \\
+\texttt{MaxPool2d}     & \texttt{nn/layers/pooling.hpp} & Max pooling \\
+\texttt{AvgPool2d}     & \texttt{nn/layers/pooling.hpp} & Average pooling \\
+\texttt{Dropout}       & \texttt{nn/layers/dropout.hpp} & Dropout regularization \\
+\texttt{SGD}           & \texttt{nn/optim/sgd.hpp}   & SGD optimizer \\
+\texttt{Dataset}       & \texttt{data/dataset.hpp}   & Abstract dataset \\
+\texttt{DataLoader}    & \texttt{data/dataloader.hpp} & Batched data iterator \\
+\texttt{NoGradGuard}   & \texttt{ops/graph.hpp}      & RAII grad disabler \\
+\texttt{ThreadPool}    & \texttt{parallel/pool.hpp}   & Persistent worker pool \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\chapter{Operator Reference}
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+\textbf{Function} & \textbf{File} & \textbf{Forward} & \textbf{Backward} \\
+\midrule
+\texttt{add(A,B)}       & \texttt{ops\_elmwise.cpp} & $A+B$ & $\nabla A += g,\; \nabla B += g$ \\
+\texttt{sub(A,B)}       & \texttt{ops\_elmwise.cpp} & $A-B$ & $\nabla A += g,\; \nabla B -= g$ \\
+\texttt{mul(A,B)}       & \texttt{ops\_elmwise.cpp} & $A*B$ & $\nabla A += g*B,\; \nabla B += g*A$ \\
+\texttt{div(A,B)}       & \texttt{ops\_elmwise.cpp} & $A/B$ & $\nabla A += g/B,\; \nabla B -= gA/B^2$ \\
+\texttt{neg(x)}         & \texttt{ops\_elmwise.cpp} & $-x$ & $\nabla x -= g$ \\
+\texttt{expv(x)}        & \texttt{ops\_elmwise.cpp} & $e^x$ & $\nabla x += g \cdot e^x$ \\
+\texttt{relu(x)}        & \texttt{activations.cpp}  & $\max(0,x)$ & $g \cdot \mathbf{1}[x>0]$ \\
+\texttt{matmul(A,B)}    & \texttt{ops\_linalg.cpp}  & $AB$ & $gB^T$, $A^Tg$ \\
+\texttt{transpose(A)}   & \texttt{ops\_linalg.cpp}  & swap last 2 dims & transpose grad \\
+\texttt{at(A,b,e)}      & \texttt{ops\_slice.cpp}   & slice & scatter grad \\
+\texttt{sum(x,axes)}    & \texttt{reduce.cpp}       & sum along axes & broadcast grad \\
+\texttt{mean(x,axes)}   & \texttt{reduce.cpp}       & mean along axes & broadcast grad$/n$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\chapter{Key Design Patterns}
+
+\begin{description}
+  \item[Shared ownership via \texttt{shared\_ptr}]
+    All Nodes are managed by reference-counted smart pointers.  Operators store
+    parent pointers; the user holds the output.  The graph stays alive exactly
+    as long as needed.
+
+  \item[Closures as backward functions]
+    Each operator packages its backward logic as a \texttt{std::function<void()>}
+    that captures the necessary context (parent nodes, intermediate values) by
+    value.  This decouples the forward and backward passes.
+
+  \item[RAII everywhere]
+    \texttt{NoGradGuard}, \texttt{ScopedSerial}, \texttt{NestedParallelGuard}
+    all use constructor/destructor pairs to manage state transitions safely.
+
+  \item[Thread-local storage]
+    Per-thread scratch buffers (in GEMM packing), worker IDs, and nesting flags
+    use \texttt{thread\_local} to avoid synchronization overhead.
+
+  \item[Value semantics for Variable]
+    Copying a \texttt{Variable} is cheap (just a \texttt{shared\_ptr} copy).
+    This simplifies the API: functions can return \texttt{Variable} by value.
+\end{description}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  CPU OPTIMIZATION PLAN
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\chapter{CPU Optimization Plan}\label{ch:optplan}
+
+This chapter presents a from-scratch, prioritized CPU optimization plan for the
+entire AutoCalc codebase.  Every item is grounded in the actual source code
+audited in February 2026; file paths, line-level observations, and concrete
+implementation sketches are given for each.
+
+The plan is organized into four tiers by expected impact on end-to-end training
+wall-clock time (measured on the \texttt{ResNet\_MNIST.py} benchmark,
+\texttt{bs=128}, 60\,000 images, 5 epochs).  All optimizations are
+\textbf{architecture-portable} (x86-64 and AArch64) unless explicitly noted;
+platform-specific SIMD paths use compile-time dispatch.
+
+\begin{tcolorbox}[title={Impact Legend},colback=white]
+\begin{description}[leftmargin=3em,style=nextline]
+  \item[\textbf{P0} — Critical] Each alone is expected to yield $\ge 2\times$ speedup on at
+    least one major kernel (GEMM, Conv, Elementwise).
+  \item[\textbf{P1} — High] $1.2$--$2\times$ on a hot path; unlocks further
+    optimizations.
+  \item[\textbf{P2} — Medium] $1.05$--$1.2\times$ end-to-end; important for
+    production quality.
+  \item[\textbf{P3} — Low / Long-term] Architectural changes that pay off at
+    larger scale or enable future GPU/accelerator ports.
+\end{description}
+\end{tcolorbox}
+
+%───────────────────────────────────────────────────────────────────────────────
+\section{Executive Summary}
+
+\begin{center}
+\begin{tabular}{c l l c}
+\toprule
+\textbf{Tier} & \textbf{ID} & \textbf{Title} & \textbf{Est.\ Speedup} \\
+\midrule
+P0 & O-1  & Platform-SIMD GEMM Microkernel (NEON / SSE+AVX) & $4$--$8\times$ GEMM \\
+P0 & O-2  & Contiguous Fast-Path for Elementwise Ops       & $3$--$6\times$ elemwise \\
+P0 & O-3  & Conv2d backward dX via im2col + GEMM           & $5$--$10\times$ conv-bwd \\
+\midrule
+P1 & O-4  & Eliminate Variable/Node Allocation in Conv Fwd  & $1.3$--$1.5\times$ conv-fwd \\
+P1 & O-5  & Pack-A Once per MC Panel (not per micro-tile)  & $1.2$--$1.4\times$ GEMM \\
+P1 & O-6  & Conv2d backward dW via Transposed GEMM         & $1.5$--$2\times$ conv-bwd \\
+P1 & O-7  & Fused BatchNorm Forward + Backward             & $1.2\times$ BN \\
+P1 & O-8  & cross\_entropy: Cache Softmax from Forward      & $1.3\times$ loss-bwd \\
+P1 & O-9  & Parallelize Conv2d backward dX                 & $T_{\text{threads}}\times$ \\
+\midrule
+P2 & O-10 & Portable Vectorized Elementwise Kernels         & $2$--$4\times$ elemwise \\
+P2 & O-11 & Thread-Pool Allocation Amortization            & fewer \texttt{malloc} \\
+P2 & O-12 & GEMM packB Reuse Across Row Tiles              & $1.1\times$ GEMM \\
+P2 & O-13 & Prefetch Insertion in GEMM Microkernel         & $1.05$--$1.15\times$ \\
+P2 & O-14 & Aligned Allocation for Tensor Storage          & $1.05\times$ \\
+P2 & O-15 & \texttt{pick\_tiles\_runtime()} Caching        & remove per-call overhead \\
+\midrule
+P3 & O-16 & Conv+BN+ReLU Operator Fusion                  & $1.3$--$1.5\times$ fwd \\
+P3 & O-17 & Arena / Pool Allocator for Node + Tensor       & reduced RSS, fewer stalls \\
+P3 & O-18 & Winograd $F(2\times2, 3\times3)$ Conv          & $2.25\times$ conv $3\times3$ \\
+P3 & O-19 & Platform BLAS Dispatch (Accelerate / MKL / OpenBLAS) & vendor-tuned SGEMM \\
+P3 & O-20 & In-Place Gradient Accumulation                 & $-30\%$ peak memory \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\bigskip
+The rest of this chapter details each item: the \emph{current state}
+(what the code does today), the \emph{problem} (why it is slow), the
+\emph{proposed fix} (concrete implementation sketch), and any
+\emph{dependencies} on other items.
+
+
+%═══════════════════════════════════════════════════════════════════════════════
+\section{P0 --- Critical Optimizations}
+%═══════════════════════════════════════════════════════════════════════════════
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-1: Platform-SIMD GEMM Microkernel}\label{sec:o1}
+
+\paragraph{Current state.}
+\texttt{include/ag/ops/gemm.hpp}, function \texttt{microkernel\_8x8\_f32}.
+The inner kernel is pure scalar C++: it loads 8 values from packed-A and 8 from
+packed-B into \texttt{float} locals, then performs $8 \times 8 = 64$ scalar
+\texttt{+=} multiply-accumulates per $k$-iteration.  The compiler
+\emph{may} auto-vectorize parts of this, but in practice the $8 \times 8$
+accumulator layout with 64 independent scalar variables exceeds what register
+allocators can handle cleanly, causing spills on every platform:
+\begin{itemize}
+  \item \textbf{AArch64 (NEON/ASIMD):} 32$\times$128-bit registers.  A $8 \times 8$
+    accumulator needs 16 \texttt{float32x4\_t} regs---fits, but the scalar code
+    gives no hints and Clang produces partial 4-wide \texttt{fmla} with spills.
+  \item \textbf{x86-64 (SSE4.1):} 16$\times$128-bit XMM registers.  Same 16-reg
+    accumulator leaves \emph{zero} free registers---guaranteed spilling.
+  \item \textbf{x86-64 (AVX/AVX2):} 16$\times$256-bit YMM registers.
+    An $8 \times 8$ accumulator needs only 8 registers (each 8-wide), leaving 8
+    for A/B loads---perfect fit, but requires a different MR$\times$NR choice
+    (e.g., $6 \times 16$ for AVX2).
+\end{itemize}
+
+\paragraph{Problem.}
+Without intrinsics, the compiler cannot achieve $>50\%$ of theoretical FMA
+throughput on any platform.  The scalar code is architecturally neutral but
+universally slow.
+
+\paragraph{Proposed fix: compile-time dispatch via \texttt{\#ifdef}.}
+Provide three microkernel implementations behind a unified interface:
+
+\begin{lstlisting}[language=C++,caption={Portable microkernel dispatch}]
+// gemm_microkernel.hpp
+#pragma once
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+  #include "gemm_microkernel_neon.hpp"   // 8x8, NEON fmla
+  constexpr int ARCH_MR = 8, ARCH_NR = 8;
+#elif defined(__AVX2__) || defined(__FMA__)
+  #include "gemm_microkernel_avx2.hpp"   // 6x16, vfmadd231ps
+  constexpr int ARCH_MR = 6, ARCH_NR = 16;
+#elif defined(__SSE2__)
+  #include "gemm_microkernel_sse.hpp"    // 4x8, mulps+addps
+  constexpr int ARCH_MR = 4, ARCH_NR = 8;
+#else
+  #include "gemm_microkernel_scalar.hpp" // current 8x8 fallback
+  constexpr int ARCH_MR = 8, ARCH_NR = 8;
+#endif
+\end{lstlisting}
+
+\paragraph{AArch64 kernel (NEON).}
+\begin{lstlisting}[language=C++,caption={NEON 8$\times$8 microkernel sketch}]
+#include <arm_neon.h>
+inline void microkernel(const float* Ap, const float* Bp,
+                        float* C, int ldc, int kc) {
+  float32x4_t c00=vdupq_n_f32(0), c01=vdupq_n_f32(0);
+  // ... 14 more accumulators (16 total for 8x8) ...
+  for (int p = 0; p < kc; ++p) {
+    float32x4_t a0 = vld1q_f32(Ap), a1 = vld1q_f32(Ap+4);
+    float32x4_t b0 = vld1q_f32(Bp), b1 = vld1q_f32(Bp+4);
+    c00 = vfmaq_laneq_f32(c00, b0, a0, 0);
+    c01 = vfmaq_laneq_f32(c01, b1, a0, 0);
+    // ... 14 more fmla (rank-1 outer product) ...
+    Ap += 8; Bp += 8;
+  }
+  // store C[i][0..7] += acc[i]
+}
+\end{lstlisting}
+Uses 20 of 32 NEON regs (16 acc + 4 loads).  16 \texttt{fmla} per
+$k$-iter = 128 FLOP/iter.
+
+\paragraph{x86-64 kernel (AVX2 + FMA).}
+Uses a $6 \times 16$ tile: 12 \texttt{\_\_m256} accumulators (each 8-wide) =
+12 YMM regs, leaving 4 for A/B broadcasts.  Each $k$-iteration: 12
+\texttt{vfmadd231ps} = 192 FLOP/iter.
+
+\begin{lstlisting}[language=C++,caption={AVX2 6$\times$16 microkernel sketch}]
+#include <immintrin.h>
+inline void microkernel(const float* Ap, const float* Bp,
+                        float* C, int ldc, int kc) {
+  __m256 c[6][2];  // 6 rows x 2 cols of 8-wide
+  for (int i=0;i<6;i++) { c[i][0]=_mm256_setzero_ps();
+                           c[i][1]=_mm256_setzero_ps(); }
+  for (int p = 0; p < kc; ++p) {
+    __m256 b0 = _mm256_load_ps(Bp);
+    __m256 b1 = _mm256_load_ps(Bp+8);
+    for (int i = 0; i < 6; ++i) {
+      __m256 a = _mm256_broadcast_ss(Ap + i);
+      c[i][0] = _mm256_fmadd_ps(a, b0, c[i][0]);
+      c[i][1] = _mm256_fmadd_ps(a, b1, c[i][1]);
+    }
+    Ap += 6; Bp += 16;
+  }
+  // store
+}
+\end{lstlisting}
+
+\paragraph{x86-64 kernel (SSE2 fallback).}
+Uses a $4 \times 8$ tile: 8 \texttt{\_\_m128} accumulators = 8 XMM regs,
+fits in the 16-register file.  Slower than AVX2 but still $\sim 3\times$
+faster than scalar on any x86 CPU made since 2003.
+
+\paragraph{Register budget summary.}
+\begin{center}
+\begin{tabular}{l c c c c}
+\toprule
+\textbf{ISA} & \textbf{MR$\times$NR} & \textbf{Acc regs} & \textbf{Total used} & \textbf{File available} \\
+\midrule
+AArch64 NEON    & $8 \times 8$   & 16 & 20 / 32 & 12 free \\
+x86-64 AVX2+FMA & $6 \times 16$  & 12 & 16 / 16 & 0 (tight) \\
+x86-64 SSE2     & $4 \times 8$   & 8  & 12 / 16 & 4 free \\
+Scalar fallback & $8 \times 8$   & 64 scalars & spills & (current code) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Build integration.}
+The packing routines (\texttt{packA\_f32}, \texttt{packB\_f32}) are
+parameterized on MR/NR and already work for any tile size.  The only
+changes needed:
+\begin{enumerate}
+  \item Replace the \texttt{\#define AG\_GEMM\_MR 8} / \texttt{AG\_GEMM\_NR 8}
+    with \texttt{ARCH\_MR} / \texttt{ARCH\_NR} from the dispatch header.
+  \item Compile with \texttt{-march=native} on x86 (already \texttt{-mcpu=native}
+    on ARM).  CMake: \texttt{target\_compile\_options(\$\{tgt\} PRIVATE -march=native)}.
+\end{enumerate}
+
+\paragraph{Expected speedup.} $4$--$8\times$ over scalar on all platforms
+(NEON, AVX2, SSE2).
+
+\paragraph{Dependencies.} None.  Drop-in replacement; the packing format
+is parameterized.
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-2: Contiguous Fast-Path for Elementwise Ops}\label{sec:o2}
+
+\paragraph{Current state.}
+\texttt{src/ag/ops/ops\_elmwise.cpp}.  Every elementwise op (\texttt{add},
+\texttt{sub}, \texttt{mul}, \texttt{div}) calls \texttt{unravel\_index()} and
+\texttt{map\_aligned()} \emph{per output element}, even when both inputs and
+the output have identical shapes (the overwhelmingly common case in neural
+network training).
+
+\texttt{unravel\_index} (in \texttt{src/ag/core/tensor\_utils.cpp}) performs a
+loop of $R$ integer divisions/modulos per call, where $R$ is the tensor rank
+(typically 2--4).  \texttt{map\_aligned} then does another $R$ multiplies.
+For a tensor of $N$ elements this is $\mathcal{O}(NR)$ integer div/mod
+operations---completely unnecessary when shapes match.
+
+\paragraph{Problem.}
+On a \texttt{[128, 64, 14, 14]} tensor ($\approx 16$M elements), each forward
+\texttt{add} executes $\sim$16M $\times$ (4 divs + 4 mods + 8 muls) $= 256$M
+extra integer operations.  This dominates the cost of the actual floating-point
+addition.
+
+The backward path \emph{already} has a fast-path for the no-broadcast case
+(lines 79--91), but the \textbf{forward path does not}.
+
+\paragraph{Proposed fix.}
+Add a same-shape fast path at the top of each elementwise op's forward:
+
+\begin{lstlisting}[language=C++,caption={Contiguous same-shape fast path}]
+// At the top of add(), after computing out_shape:
+if (A.n->shape == B.n->shape) {
+  // Shapes identical => contiguous 1:1 mapping, no broadcast
+  if (oN < ELEM_SERIAL_CUTOFF) {
+    for (std::size_t i = 0; i < oN; ++i)
+      out->value[i] = A.n->value[i] + B.n->value[i];
+  } else {
+    const float* a = A.n->value.data();
+    const float* b = B.n->value.data();
+    float* o = out->value.data();
+    ag::parallel::parallel_for(oN, ELEM_GRAIN, [a,b,o](std::size_t i0, std::size_t i1){
+      for (std::size_t i = i0; i < i1; ++i)
+        o[i] = a[i] + b[i];
+    });
+  }
+  // skip the broadcast path entirely
+}
+\end{lstlisting}
+
+This applies to \texttt{add}, \texttt{sub}, \texttt{mul}, \texttt{div}
+(forward), and also to the backward of \texttt{mul} and \texttt{div} where
+the broadcast fallback still uses \texttt{unravel\_index}.
+
+\paragraph{Also add scalar-broadcast fast path.}
+A second common case is \texttt{A.shape == [B,C,H,W]} and
+\texttt{B.shape == [1]} (or vice-versa).  This should be detected and
+handled with a simple scalar broadcast loop, again avoiding
+\texttt{unravel\_index}.
+
+\paragraph{Expected speedup.} $3$--$6\times$ for elementwise ops in the
+common no-broadcast case.
+
+\paragraph{Dependencies.} None.  Purely additive fast-paths.
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-3: Conv2d Backward dX via im2col + GEMM}\label{sec:o3}
+
+\paragraph{Current state.}
+\texttt{src/ag/nn/layers/conv2d.cpp}, lines 300--336.
+The backward pass for \texttt{dX} uses a \textbf{6-nested serial loop}
+(\texttt{B $\times$ Cout $\times$ H\_out $\times$ W\_out $\times$ Cin $\times$
+KH $\times$ KW}) with scalar scatter-adds into \texttt{xnode->grad}.
+
+\paragraph{Problem.}
+This is the single slowest kernel in backward for any convolution-heavy
+network.  For a typical \texttt{Conv2d(32, 64, 3, stride=2, padding=1)} with
+\texttt{[128, 32, 28, 28]} input:
+\[
+  128 \times 64 \times 14 \times 14 \times 32 \times 3 \times 3 =
+  \text{2.9 billion scalar ops (serial)}
+\]
+Meanwhile the forward and dW paths use im2col + GEMM and are parallelized.
+
+\paragraph{Proposed fix.}
+Use the standard ``col2im'' formulation:
+\begin{enumerate}
+  \item Reshape \texttt{dY} as \texttt{(B*H\_out*W\_out, Cout)}.
+  \item Compute \texttt{dX\_col = dY @ W\_reshaped\textsuperscript{T}}
+    where \texttt{W\_reshaped} is \texttt{(Cout, Cin*KH*KW)} $\to$
+    gives \texttt{(B*H\_out*W\_out, Cin*KH*KW)}.  This is a single GEMM call.
+  \item Scatter \texttt{dX\_col} back into \texttt{dX} via col2im (the inverse
+    of im2col), which is parallelizable over batch$\times$spatial.
+\end{enumerate}
+
+The GEMM call is $\mathcal{O}(B \cdot H_o W_o \cdot C_\text{out} \cdot C_\text{in} K_H K_W)$,
+identical arithmetic, but now runs through the optimized tiled+packed GEMM
+kernel instead of scalar scatter.  The col2im scatter is $\mathcal{O}(B \cdot
+H_o W_o \cdot C_\text{in} K_H K_W)$ and embarrassingly parallel.
+
+\begin{lstlisting}[language=C++,caption={Conv2d dX via GEMM + col2im (sketch)}]
+// dX_col (rows x K) = dY_mat (rows x Cout) @ Wcol^T (Cout x K)
+// where rows = B*H_out*W_out, K = Cin*KH*KW
+std::vector<float> dX_col(rows * K, 0.0f);
+ag::ops::sgemm_f32(rows, K, Cout,
+                    ag::ops::Trans::N, ag::ops::Trans::T,
+                    dY_mat, Cout, Wcol, Cout,
+                    dX_col.data(), K);
+
+// col2im: scatter dX_col into xnode->grad (parallel over rows)
+ag::parallel::parallel_for(rows, 256, [&](size_t r0, size_t r1){
+  for (size_t r = r0; r < r1; ++r) {
+    // decode r -> (b, oh, ow), then for each (ic, kh, kw):
+    //   xnode->grad[x_off] += dX_col[r * K + idx];
+    // (atomic adds needed if windows overlap)
+  }
+});
+\end{lstlisting}
+
+\paragraph{Expected speedup.} $5$--$10\times$, from replacing serial
+scatter with parallelized GEMM + parallel col2im.
+
+\paragraph{Dependencies.} Benefits further from O-1 (SIMD GEMM kernel).
+
+
+%═══════════════════════════════════════════════════════════════════════════════
+\section{P1 --- High-Impact Optimizations}
+%═══════════════════════════════════════════════════════════════════════════════
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-4: Eliminate Variable/Node Allocation in Conv Forward}\label{sec:o4}
+
+\paragraph{Current state.}
+\texttt{src/ag/nn/layers/conv2d.cpp}, lines 113--130.
+Inside the \texttt{parallel\_for} over im2col row-blocks, the code constructs
+\texttt{Variable Ablock(...)}, \texttt{Variable Bmat(...)}, and calls
+\texttt{ag::matmul(Ablock, Bmat)}.  Each \texttt{Variable} constructor
+allocates a \texttt{shared\_ptr<Node>}, copies the data vector, allocates the
+grad vector, and increments \texttt{g\_live\_node\_count}.
+
+For \texttt{bs=128}, a \texttt{Conv2d(32, 64, 3)} with \texttt{H\_out=W\_out=14}
+has \texttt{rows = 128*14*14 = 25088}.  With \texttt{ROW\_BLOCK=256}, that is
+$\lceil 25088/256 \rceil = 98$ blocks.  Each block creates \textbf{3 Variables
+(6 Nodes)} $\to$ 588 heap allocations per conv layer per forward pass, many
+inside a parallel region.
+
+\paragraph{Problem.}
+Heap allocation inside \texttt{parallel\_for} serializes on the global
+allocator lock.  The \texttt{Variable} wrappers also copy data unnecessarily
+(the im2col block is a local \texttt{std::vector<float>} that could be passed
+by pointer).  Node overhead (backward closure, parents vector) is wasted since
+these intermediates are never differentiated.
+
+\paragraph{Proposed fix.}
+Call \texttt{sgemm\_f32()} directly on raw \texttt{float*} buffers, bypassing
+the \texttt{Variable}/\texttt{matmul} API entirely:
+
+\begin{lstlisting}[language=C++]
+// Replace Variable-based matmul with direct GEMM
+ag::ops::sgemm_f32(
+  (int)rb, (int)Cout, (int)K,
+  im2col_block.data(), (int)K,   // A: (rb x K)
+  Wcol.data(),         (int)Cout, // B: (K x Cout)
+  out->value.data() + r0 * Cout, (int)Cout  // C: (rb x Cout)
+);
+\end{lstlisting}
+
+This eliminates all 6 Node allocations per block.  The same fix applies to the
+backward dW computation (which also creates 3 Variables per block inside
+\texttt{parallel\_for}).
+
+\paragraph{Expected speedup.} $1.3$--$1.5\times$ for conv-forward; eliminates
+$\sim$1200 heap allocs per layer per step.
+
+\paragraph{Dependencies.} None.
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-5: Pack-A Once per MC Panel}\label{sec:o5}
+
+\paragraph{Current state.}
+In \texttt{sgemm\_f32} (\texttt{gemm.hpp} line~254), \texttt{packA\_f32} is
+called \emph{per micro-tile} $(bi, bj)$ inside the innermost
+\texttt{parallel\_for}.  The same $MR$-row strip of A is re-packed once for
+every column tile $bj$.  For a matrix with $N = 2048$ and $NR = 8$, that means
+each A-strip is packed $2048/8 = 256$ times.
+
+\paragraph{Problem.}
+Packing A is $\mathcal{O}(MR \times KC)$ per call.  Re-packing 256 times
+wastes $\sim 99.6\%$ of the packing work.
+
+\paragraph{Proposed fix.}
+Restructure the GEMM loop nesting to the standard Goto/BLIS order:
+\texttt{jc $\to$ pc $\to$ ic $\to$ jr $\to$ ir}.  Pack the full
+$MC \times KC$ A-panel once per \texttt{(pc, ic)} iteration (not per micro-tile):
+
+\begin{lstlisting}[language=C++]
+for (int ic = 0; ic < M; ic += MC) {
+  int mc = min(MC, M - ic);
+  // Pack A panel once: (mc x kc) -> Ap[mc_padded * kc]
+  packA_f32(A + ic*lda + pc, lda, Ap.data(), mc, kc, MR);
+
+  // Now iterate over NR column tiles using the SAME Ap
+  parallel_for(nb_tiles, ..., [&](size_t bj0, size_t bj1){
+    for (size_t bj = bj0; bj < bj1; ++bj) {
+      for (int bi = 0; bi < mb; ++bi) {
+        // Use Ap + bi*MR*kc (already packed), Bp + bj*(kc*NR)
+        microkernel(Ap + bi*MR*kc, Bp + bj*kc*NR, ...);
+      }
+    }
+  });
+}
+\end{lstlisting}
+
+\paragraph{Expected speedup.} $1.2$--$1.4\times$ GEMM throughput; the
+improvement scales with $N$.
+
+\paragraph{Dependencies.} Straightforward restructure.  Pairs well with O-1.
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-6: Conv2d Backward dW via Transposed GEMM}\label{sec:o6}
+
+\paragraph{Current state.}
+The dW backward in \texttt{conv2d.cpp} (lines 250--270) performs an explicit
+$K \times rb$ transpose of the im2col block into \texttt{Atrans}, then calls
+\texttt{ag::matmul(AtransV, YgV)} through the Variable API.  This:
+\begin{enumerate}
+  \item Allocates a separate $K \times rb$ buffer and copies element-by-element.
+  \item Creates 3 Variable/Node objects per block (same issue as O-4).
+  \item Uses NN GEMM on the transposed copy rather than a TN GEMM on the
+    original.
+\end{enumerate}
+
+\paragraph{Proposed fix.}
+Call \texttt{sgemm\_f32} with \texttt{Trans::T, Trans::N} directly, avoiding
+the explicit transpose and Variable allocation:
+
+\begin{lstlisting}[language=C++]
+// dW_partial (K x Cout) += im2col_block^T (K x rb) @ Yg_block (rb x Cout)
+ag::ops::sgemm_f32(
+  (int)K, (int)Cout, (int)rb,
+  ag::ops::Trans::T, ag::ops::Trans::N,
+  im2col_block.data(), (int)K,   // logical: (rb x K) stored row-major
+  Yg_block.data(),     (int)Cout, // (rb x Cout)
+  partials[bi].data(), (int)Cout, // (K x Cout)
+  1.0f, 1.0f);
+\end{lstlisting}
+
+This eliminates both the temporary allocation and the element-wise transpose.
+
+\paragraph{Expected speedup.} $1.5$--$2\times$ for conv-backward dW
+(eliminates $K \times rb$ copy + 3 Node allocs per block).
+
+\paragraph{Dependencies.} Requires the strided GEMM path (already
+implemented in \texttt{gemm.hpp}).
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-7: Fused BatchNorm Forward + Backward}\label{sec:o7}
+
+\paragraph{Current state.}
+\texttt{src/ag/nn/layers/normalization.cpp}.  The forward pass makes 3 passes
+over the data per channel:
+\begin{enumerate}
+  \item Welford mean/var ($B \times H \times W$ reads).
+  \item Normalize + affine ($B \times H \times W$ reads + writes).
+\end{enumerate}
+The backward makes 4 passes per channel:
+\begin{enumerate}
+  \item \texttt{dgamma}: read $x$, read $\text{grad}$ $\to$ accumulate.
+  \item \texttt{dbeta}: read $\text{grad}$ $\to$ accumulate.
+  \item \texttt{sum\_dy}, \texttt{sum\_dy\_xhat}: read $x$, read $\text{grad}$.
+  \item Distribute: read $x$, read $\text{grad}$, write $\text{dx}$.
+\end{enumerate}
+That's 6 passes total (2 fwd + 4 bwd).
+
+\paragraph{Proposed fix.}
+\begin{itemize}
+  \item \textbf{Forward:} Fuse into 2 passes (already ~optimal; Welford
+    requires a separate pass unless using 2-pass mean-then-variance, which has
+    the same count).
+  \item \textbf{Backward:} Fuse \texttt{dgamma}, \texttt{dbeta},
+    \texttt{sum\_dy}, and \texttt{sum\_dy\_xhat} into a \textbf{single}
+    reduction pass.  Then one distribute pass.  Total: 2 passes instead of 4.
+\end{itemize}
+
+\begin{lstlisting}[language=C++,caption={Fused BN backward single-pass reduction}]
+// Single pass: accumulate dgamma, dbeta, sum_dy, sum_dy_xhat
+for (size_t c = c0; c < c1; ++c) {
+  double dg=0, db=0, sdy=0, sdyx=0;
+  const float m = mean[c], s = inv_std[c];
+  for (/* b,h,w loop */) {
+    float dy = o->grad[i];
+    float xhat = (Xv[i] - m) * s;
+    dg   += dy * xhat;    // dgamma
+    db   += dy;            // dbeta = sum_dy
+    sdyx += dy * xhat;    // sum_dy_xhat (same as dg)
+  }
+  dgamma[c] = dg; dbeta[c] = db;
+  sum_dy[c] = db; sum_dy_xhat[c] = dg;  // reuse!
+}
+\end{lstlisting}
+
+Note that \texttt{dbeta == sum\_dy} and \texttt{dgamma == sum\_dy\_xhat}---they
+are literally the same accumulation.  The current code computes them in
+separate loops.
+
+\paragraph{Expected speedup.} $\sim 1.2\times$ for BN-heavy networks (halves
+backward memory bandwidth).
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-8: Cache Softmax from Forward in Cross-Entropy}\label{sec:o8}
+
+\paragraph{Current state.}
+\texttt{src/ag/nn/loss.cpp}.  The backward closure recomputes
+\texttt{exp(logits[b*C+c] - lse)} and normalizes by \texttt{Z} for every
+$(b, c)$ pair.  The forward already computes \texttt{logsumexp}, but the
+softmax probabilities are discarded.
+
+\paragraph{Proposed fix.}
+Save the softmax vector \texttt{p[B*C]} during forward (captured by the backward
+closure).  Then backward becomes:
+\begin{lstlisting}
+Xn->grad[b*C + c] += (p[b*C + c] - one_hot) * (seed / B);
+\end{lstlisting}
+This eliminates $B \times C$ calls to \texttt{std::exp()} in backward.
+
+\paragraph{Expected speedup.} $\sim 1.3\times$ for the loss backward kernel.
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-9: Parallelize Conv2d Backward dX}\label{sec:o9}
+
+\paragraph{Current state.}
+Even after converting dX to im2col+GEMM (O-3), the col2im scatter still
+requires care: overlapping convolution windows write to the same input
+location, creating data races.
+
+\paragraph{Proposed fix.}
+Two approaches:
+\begin{enumerate}
+  \item \textbf{Parallelize over \texttt{(batch, channel)} pairs.}
+    If we reshape dX\_col to \texttt{(B, H\_out*W\_out, Cin*KH*KW)} and
+    scatter per-batch, different batches have independent \texttt{xnode->grad}
+    regions $\to$ no races.
+  \item \textbf{Atomic float adds} (\texttt{\_\_atomic\_fetch\_add} on
+    \texttt{float}) for the overlap region.  On ARM, this compiles to
+    \texttt{ldxr}/\texttt{stxr} loops---acceptable for small kernels.
+\end{enumerate}
+Option~1 is preferred (zero overhead).
+
+\paragraph{Expected speedup.} Scales linearly with thread count (currently
+0 parallelism).
+
+
+%═══════════════════════════════════════════════════════════════════════════════
+\section{P2 --- Medium-Impact Optimizations}
+%═══════════════════════════════════════════════════════════════════════════════
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-10: Portable Vectorized Elementwise Kernels}\label{sec:o10}
+
+\paragraph{Current state.}
+The contiguous fast-paths from O-2 (once added) will still use scalar
+\texttt{float} loops.  With \texttt{-O3 -march=native}, compilers will
+auto-vectorize simple loops like \texttt{o[i] = a[i] + b[i]}, but
+\texttt{relu} (with branch), \texttt{sigmoid} (\texttt{std::exp}), and
+compound backward expressions may not auto-vectorize well.
+
+\paragraph{Proposed fix.}
+Write platform-dispatched SIMD kernels using the same \texttt{\#ifdef} pattern
+as O-1.  A thin \texttt{simd\_vec4} / \texttt{simd\_vec8} wrapper provides
+a portable API:
+
+\begin{lstlisting}[language=C++,caption={Portable SIMD wrapper sketch}]
+// simd/vec.hpp --- portable 4-wide float
+#if defined(__aarch64__)
+  #include <arm_neon.h>
+  using vec4 = float32x4_t;
+  inline vec4 vload(const float* p) { return vld1q_f32(p); }
+  inline void vstore(float* p, vec4 v) { vst1q_f32(p, v); }
+  inline vec4 vadd(vec4 a, vec4 b)  { return vaddq_f32(a,b); }
+  inline vec4 vmul(vec4 a, vec4 b)  { return vmulq_f32(a,b); }
+  inline vec4 vmax(vec4 a, vec4 b)  { return vmaxq_f32(a,b); }
+  inline vec4 vzero() { return vdupq_n_f32(0); }
+#elif defined(__SSE2__)
+  #include <xmmintrin.h>
+  using vec4 = __m128;
+  inline vec4 vload(const float* p) { return _mm_loadu_ps(p); }
+  inline void vstore(float* p, vec4 v) { _mm_storeu_ps(p, v); }
+  inline vec4 vadd(vec4 a, vec4 b)  { return _mm_add_ps(a,b); }
+  inline vec4 vmul(vec4 a, vec4 b)  { return _mm_mul_ps(a,b); }
+  inline vec4 vmax(vec4 a, vec4 b)  { return _mm_max_ps(a,b); }
+  inline vec4 vzero() { return _mm_setzero_ps(); }
+#else
+  // Scalar fallback: struct { float v[4]; } with operator overloads
+#endif
+\end{lstlisting}
+
+Hot elementwise kernels then use this abstraction:
+\begin{itemize}
+  \item \texttt{relu}: \texttt{vmax(x, vzero())} (branchless on all platforms).
+  \item \texttt{sigmoid}: Fast polynomial approximation or table lookup.
+  \item \texttt{add/sub/mul}: Direct \texttt{vadd/vsub/vmul} with 4$\times$
+    unrolling (16 floats per iteration).
+\end{itemize}
+
+On AVX2 platforms, an 8-wide \texttt{vec8} variant using \texttt{\_\_m256}
+doubles throughput.
+
+\paragraph{Expected speedup.} $2$--$4\times$ for elementwise ops (on top of
+the O-2 fast-path), portable across x86 and ARM.
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-11: Thread-Pool Allocation Amortization}\label{sec:o11}
+
+\paragraph{Current state.}
+Inside \texttt{sgemm\_f32}, \texttt{std::vector<float> Bp(Bp\_elems)} is
+allocated on every \texttt{(pc, jc)} iteration.  The im2col code in
+\texttt{conv2d.cpp} allocates \texttt{std::vector<float> im2col\_block(rb*K)}
+inside each parallel chunk.
+
+\paragraph{Proposed fix.}
+Use \texttt{thread\_local} scratch buffers (already partially done for
+\texttt{Ap\_buf} in \texttt{sgemm\_packedB\_f32}; extend to Bp and im2col):
+
+\begin{lstlisting}[language=C++]
+thread_local std::vector<float> tls_Bp;
+if (tls_Bp.size() < Bp_elems) tls_Bp.resize(Bp_elems);
+// use tls_Bp.data() instead of allocating new vector
+\end{lstlisting}
+
+For the outer Bp buffer (shared across threads), allocate once outside the loop
+and reuse.  The current code already packs Bp outside the parallel region, but
+re-allocates it per \texttt{(pc, jc)} $\to$ hoist allocation before the
+\texttt{jc} loop.
+
+\paragraph{Expected speedup.} Reduces \texttt{malloc}/\texttt{free} calls
+by $\sim 10\times$ for GEMM-heavy workloads.
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-12: GEMM packB Reuse Across Row Tiles}\label{sec:o12}
+
+\paragraph{Current state.}
+In \texttt{matmul\_tiled\_core} (\texttt{ops\_linalg.cpp} lines 105--140),
+for each \texttt{(j0\_tile, p0)} panel, the B panel is packed once and
+then the parallel loop iterates over row tiles.  This is already correct---
+B is packed once and shared.  However, in the top-level \texttt{sgemm\_f32}
+(\texttt{gemm.hpp}), B is packed per \texttt{(pc, jc)} but a
+\textbf{new vector is allocated each time} (line 226).
+
+\paragraph{Proposed fix.}
+Hoist the Bp vector allocation above the \texttt{jc}/\texttt{pc} loops:
+\begin{lstlisting}
+const int max_nc = NC, max_kc = KC;
+const int max_nb = (max_nc + NR - 1) / NR;
+std::vector<float> Bp(max_kc * max_nb * NR);
+// reuse Bp across all (jc, pc) iterations
+\end{lstlisting}
+
+\paragraph{Expected speedup.} $\sim 1.1\times$ for large GEMMs.
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-13: Prefetch Insertion in GEMM Microkernel}\label{sec:o13}
+
+\paragraph{Current state.}
+\texttt{ag/sys/hw.hpp} defines \texttt{prefetch\_read()} and
+\texttt{prefetch\_write()} helpers, but they are \textbf{never used} anywhere
+in the codebase.
+
+\paragraph{Proposed fix.}
+Insert prefetches in the SIMD microkernel (O-1) to hide L1 miss latency.
+The existing \texttt{ag::sys::prefetch\_read()} helper (in \texttt{hw.hpp})
+already compiles portably via \texttt{\_\_builtin\_prefetch} (GCC/Clang on
+both x86 and ARM) and is a no-op on MSVC:
+\begin{lstlisting}[language=C++]
+for (int p = 0; p < kc; ++p) {
+  if ((p & 3) == 0) {  // every 4 iterations
+    ag::sys::prefetch_read(Ap + 8*4, ag::sys::PrefetchLocality::High);
+    ag::sys::prefetch_read(Bp + 8*4, ag::sys::PrefetchLocality::High);
+  }
+  // ... fmla ...
+}
+\end{lstlisting}
+Also prefetch the C output tile before the store phase.
+
+\paragraph{Expected speedup.} $1.05$--$1.15\times$ for large GEMM problems
+where L1 misses are the bottleneck.
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-14: Aligned Allocation for Tensor Storage}\label{sec:o14}
+
+\paragraph{Current state.}
+Tensor data lives in \texttt{std::vector<float>} (\texttt{Node::value},
+\texttt{Node::grad}).  The default allocator returns 16-byte--aligned memory
+on most platforms, but SIMD loads/stores on all architectures benefit from
+64-byte (cache-line) alignment: NEON \texttt{vld1q}, SSE \texttt{\_mm\_load\_ps},
+and AVX \texttt{\_mm256\_load\_ps} all suffer penalties on split cache-line
+accesses.
+
+\paragraph{Proposed fix.}
+Replace \texttt{std::vector<float>} with a custom
+\texttt{AlignedVector<float, 64>} backed by \texttt{std::aligned\_alloc(64, n)}
+(C++17, portable to GCC/Clang/MSVC; falls back to \texttt{posix\_memalign} on
+older toolchains).  This ensures SIMD vector loads never cross a cache-line
+boundary on any platform.
+
+\paragraph{Expected speedup.} $\sim 1.05\times$ (removes split-line loads
+in tight loops).
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-15: Cache \texttt{pick\_tiles\_runtime()} Result}\label{sec:o15}
+
+\paragraph{Current state.}
+\texttt{pick\_tiles\_runtime(sizeof(float))} is called at the \textbf{top of
+every} \texttt{sgemm\_f32} invocation.  It calls \texttt{cache\_info()} and
+performs floating-point arithmetic to compute tile sizes.  During conv forward
+with 98 row-blocks, this is called 98 times per layer---all returning the
+same result.
+
+\paragraph{Proposed fix.}
+Cache the result in a function-local static (thread-safe via C++11 guarantee):
+\begin{lstlisting}[language=C++]
+inline const GemmTiles& cached_tiles_f32() {
+  static const GemmTiles t = pick_tiles_runtime(sizeof(float));
+  return t;
+}
+\end{lstlisting}
+
+\paragraph{Expected speedup.} Negligible individually but removes noise from
+profiles and prevents cache\_info() syscalls.
+
+
+%═══════════════════════════════════════════════════════════════════════════════
+\section{P3 --- Long-Term / Architectural Optimizations}
+%═══════════════════════════════════════════════════════════════════════════════
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-16: Conv + BN + ReLU Operator Fusion}\label{sec:o16}
+
+\paragraph{Current state.}
+Each op (Conv2d, BatchNorm2d, ReLU) produces a separate \texttt{Node} with
+its own \texttt{value} and \texttt{grad} vectors.  Data flows from
+Conv output $\to$ BN input $\to$ BN output $\to$ ReLU input $\to$ ReLU output,
+touching memory 6 times (3 writes + 3 reads).
+
+\paragraph{Proposed fix.}
+Implement a fused \texttt{ConvBnRelu} module that:
+\begin{enumerate}
+  \item Performs im2col + GEMM to produce the conv output tile (in L1).
+  \item Immediately applies BN (using pre-computed mean/var) and ReLU
+    \emph{before} writing to memory.
+  \item Stores the final result once.
+\end{enumerate}
+This reduces memory traffic by $\sim 3\times$ for the most common
+subgraph in ResNets.
+
+The backward is similarly fused: ReLU mask $\to$ BN backward $\to$ col2im,
+all operating on the same data in registers/L1.
+
+\paragraph{Expected speedup.} $1.3$--$1.5\times$ for fwd+bwd of
+Conv+BN+ReLU blocks (bandwidth-bound).
+
+\paragraph{Dependencies.} Requires O-3 (GEMM-based dX) and O-7 (fused BN).
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-17: Arena / Pool Allocator for Nodes and Tensors}\label{sec:o17}
+
+\paragraph{Current state.}
+Every forward op calls \texttt{std::make\_shared<Node>()}, which does a
+heap allocation for the control block + Node object.  The \texttt{value} and
+\texttt{grad} vectors each do their own heap allocation.  For a ResNet-18--style
+forward pass with $\sim$50 ops, that is $\sim$150 heap allocations per
+iteration---plus $\sim$150 deallocations in the post-backward cleanup.
+
+\paragraph{Proposed fix.}
+Implement a simple per-thread arena allocator:
+\begin{itemize}
+  \item Pre-allocate a 4~MB slab.  \texttt{Node} objects (fixed size) are
+    bump-allocated from the slab.  Freed nodes go onto a freelist for reuse.
+  \item Tensor storage uses a size-bucketed pool (powers of 2).  Freed buffers
+    return to the pool instead of calling \texttt{free()}.
+  \item Expose \texttt{ag::reset\_arena()} for users who want to force
+    deallocation between epochs.
+\end{itemize}
+
+\paragraph{Expected speedup.} Reduces \texttt{malloc}/\texttt{free} overhead
+and improves cache locality of Node metadata.
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-18: Winograd $F(2\times2, 3\times3)$ Convolution}\label{sec:o18}
+
+\paragraph{Current state.}
+All convolutions use im2col + GEMM regardless of kernel size.  For the
+ubiquitous $3 \times 3$ kernel, im2col produces a $9\times$ expansion of the
+input, increasing both memory usage and GEMM $K$-dimension.
+
+\paragraph{Proposed fix.}
+Implement Winograd $F(2 \times 2, 3 \times 3)$:
+\begin{itemize}
+  \item Reduces arithmetic from $2 \times 2 \times 3 \times 3 = 36$ multiplies
+    per output tile to $4 \times 4 = 16$ multiplies---a $2.25\times$ reduction.
+  \item Transforms are small fixed $4 \times 4$ matrices (can be hardcoded).
+  \item Falls back to im2col for non-$3 \times 3$ kernels.
+\end{itemize}
+The implementation follows the Lavin \& Gray (2016) approach: tile the spatial
+domain into $2 \times 2$ output tiles, apply the $4 \times 4$ input/filter
+transforms, batch the pointwise products as a GEMM per transform element, then
+inverse-transform.
+
+\paragraph{Expected speedup.} $\sim 2.25\times$ for $3 \times 3$ conv layers
+(which dominate ResNet).
+
+\paragraph{Dependencies.} Pairs with O-1 (the pointwise GEMMs benefit from
+the platform-SIMD microkernel).
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-19: Platform BLAS Dispatch (Accelerate / MKL / OpenBLAS)}\label{sec:o19}
+
+\paragraph{Current state.}
+The codebase has zero external BLAS dependencies.  Every platform ships (or
+can install) a vendor-tuned BLAS that far exceeds what a hand-written
+microkernel can achieve:
+\begin{itemize}
+  \item \textbf{macOS:} Apple Accelerate (\texttt{cblas\_sgemm}) uses AMX
+    coprocessor instructions on M1+ ($>90\%$ of peak).
+  \item \textbf{Linux/Windows x86:} Intel MKL or OpenBLAS, which use AVX-512
+    and cache-oblivious tiling.
+  \item \textbf{Linux ARM:} OpenBLAS has optimized AArch64 kernels; BLIS is
+    another option.
+\end{itemize}
+
+\paragraph{Proposed fix.}
+Add a CMake option \texttt{-DAG\_USE\_BLAS=ON} with auto-detection:
+
+\begin{lstlisting}[language=C++,caption={Platform BLAS dispatch}]
+// gemm_blas.hpp
+#if defined(AG_USE_BLAS)
+  #if defined(__APPLE__)
+    #include <Accelerate/Accelerate.h>
+  #elif defined(AG_USE_MKL)
+    #include <mkl_cblas.h>
+  #else
+    #include <cblas.h>  // OpenBLAS, BLIS, etc.
+  #endif
+
+  inline void sgemm_f32(int M, int N, int K,
+                         Trans transA, Trans transB,
+                         const float* A, int lda,
+                         const float* B, int ldb,
+                         float* C, int ldc,
+                         float alpha, float beta) {
+    cblas_sgemm(CblasRowMajor,
+                transA == Trans::T ? CblasTrans : CblasNoTrans,
+                transB == Trans::T ? CblasTrans : CblasNoTrans,
+                M, N, K, alpha, A, lda, B, ldb, beta, C, ldc);
+  }
+#else
+  // ... existing custom GEMM (O-1 SIMD microkernel) ...
+#endif
+\end{lstlisting}
+
+CMake integration:
+\begin{lstlisting}[language=bash]
+# CMakeLists.txt
+option(AG_USE_BLAS "Use platform BLAS for SGEMM" OFF)
+if(AG_USE_BLAS)
+  if(APPLE)
+    find_library(ACCELERATE Accelerate)
+    target_link_libraries(autocalc_lib PRIVATE ${ACCELERATE})
+  else()
+    find_package(BLAS REQUIRED)  # finds MKL, OpenBLAS, etc.
+    target_link_libraries(autocalc_lib PRIVATE ${BLAS_LIBRARIES})
+  endif()
+  target_compile_definitions(autocalc_lib PRIVATE AG_USE_BLAS)
+endif()
+\end{lstlisting}
+
+This is the ``escape hatch'' for users who want maximum GEMM performance
+without maintaining a custom microkernel.  The custom O-1 kernels remain the
+default so the project has \textbf{zero external dependencies} out of the box.
+
+\paragraph{Expected speedup.}
+\begin{itemize}
+  \item macOS Apple Silicon (Accelerate/AMX): $3$--$10\times$ GEMM.
+  \item Linux x86 (MKL/AVX-512): $2$--$5\times$ over custom AVX2.
+  \item Linux ARM (OpenBLAS): $1.5$--$3\times$ over custom NEON.
+\end{itemize}
+
+\paragraph{Dependencies.} Mutually exclusive with O-1's custom kernels at
+link time.  Both can coexist in the source tree.
+
+%───────────────────────────────────────────────────────────────────────────────
+\subsection{O-20: In-Place Gradient Accumulation \& Buffer Reuse}\label{sec:o20}
+
+\paragraph{Current state.}
+Every op allocates \texttt{out->grad.assign(oN, 0.0f)} in the forward pass,
+even though the gradient buffer is not needed until the backward pass.  For
+non-leaf nodes that are immediately freed after backward, this is wasted
+allocation.
+
+\paragraph{Proposed fix.}
+\begin{itemize}
+  \item \textbf{Lazy grad allocation:} Only allocate \texttt{grad} when first
+    written to (in backward).  The forward pass sets
+    \texttt{grad = \{\}} (empty).
+  \item \textbf{Buffer reuse:} After post-backward cleanup, instead of
+    destroying \texttt{value} and \texttt{grad} vectors, return them to a
+    size-bucketed buffer pool.  The next forward pass can grab a pre-allocated
+    buffer of the right size without calling \texttt{malloc}.
+  \item \textbf{In-place ops:} For unary ops where the input is not needed
+    after the backward (e.g., ReLU, dropout), reuse the input's value buffer
+    as the output's value buffer (aliased storage).
+\end{itemize}
+
+\paragraph{Expected speedup.} $\sim 30\%$ reduction in peak memory; modest
+wall-clock improvement from fewer allocations.
+
+
+%═══════════════════════════════════════════════════════════════════════════════
+\section{Implementation Roadmap}\label{sec:roadmap}
+
+The following order maximizes bang-for-buck while respecting dependencies:
+
+\begin{enumerate}
+  \item \textbf{Week 1:} O-2 (contiguous fast-path) + O-4 (eliminate Variable
+    in conv) + O-15 (cache tiles).  These are pure additive changes with no
+    risk of regression.  \emph{Expected: $2$--$3\times$ end-to-end.}
+
+  \item \textbf{Week 2:} O-1 (platform-SIMD microkernel) + O-5 (pack-A restructure).
+    These require careful testing against the existing GEMM test suite.
+    Start with the host platform (e.g., NEON on M-series), then add
+    AVX2 and SSE2 paths.
+    \emph{Expected: additional $2$--$3\times$ on GEMM-bound layers.}
+
+  \item \textbf{Week 3:} O-3 (GEMM-based dX) + O-6 (TN GEMM for dW) +
+    O-9 (parallelize dX scatter).  This completes the conv backward
+    overhaul.  \emph{Expected: $3$--$5\times$ conv backward.}
+
+  \item \textbf{Week 4:} O-7 (fuse BN backward) + O-8 (cache softmax) +
+    O-10 (portable SIMD elementwise) + O-11/O-12 (allocation amortization).
+    \emph{Expected: $1.3$--$1.5\times$ across remaining ops.}
+
+  \item \textbf{Month 2+:} O-16 (Conv+BN+ReLU fusion) + O-17 (arena
+    allocator) + O-18 (Winograd) + O-19 (platform BLAS dispatch) + O-20
+    (lazy grad).  These are larger architectural changes.
+\end{enumerate}
+
+\paragraph{Estimated cumulative speedup.}
+Conservatively, completing P0 + P1 should yield a $5$--$10\times$ wall-clock
+improvement on the ResNet MNIST benchmark on \emph{any} platform (x86-64 or
+AArch64).  Adding P2 items pushes this to $8$--$15\times$.  The P3 items
+(especially O-19 with a vendor BLAS) could reach $20$--$40\times$ by
+leveraging hardware-specific accelerators (AMX on Apple, AVX-512 on Intel,
+etc.).
+
+
+%═══════════════════════════════════════════════════════════════════════════════
+\section{Profiling Methodology}\label{sec:profmeth}
+
+To validate each optimization, use the following instrumentation:
+
+\begin{enumerate}
+  \item \textbf{Wall-clock benchmarks:}
+    \texttt{py\_demos/ResNet\_MNIST.py --n 60000 --bs 128 --epochs 1}
+    with \texttt{--plot} enabled.  Compare AG wall-time before/after.
+
+  \item \textbf{Platform profilers:}
+    \begin{itemize}
+      \item \textbf{macOS:} Apple Instruments (Time Profiler):
+        \texttt{xcrun xctrace record --template "Time Profiler" --launch
+        ./build/fast/fast\_resnet}.
+      \item \textbf{Linux:} \texttt{perf record -g ./build/fast/fast\_resnet}
+        then \texttt{perf report}.
+      \item \textbf{Windows:} Visual Studio Performance Profiler or
+        \texttt{VTune}.
+    \end{itemize}
+    Use these to identify hot functions and verify vectorization.
+
+  \item \textbf{LLVM Machine Code Analyzer} (\texttt{llvm-mca}):
+    Disassemble the microkernel and feed it through \texttt{llvm-mca} to
+    verify throughput and identify pipeline stalls.  Works on all targets:
+    \begin{lstlisting}[language=bash]
+# AArch64 (Apple M-series)
+clang++ -S -O3 -mcpu=apple-m1 -o - gemm_kernel.cpp | \
+  llvm-mca -mcpu=apple-m1 -timeline
+# x86-64 (Intel/AMD)
+clang++ -S -O3 -march=znver3 -o - gemm_kernel.cpp | \
+  llvm-mca -mcpu=znver3 -timeline
+    \end{lstlisting}
+
+  \item \textbf{Memory profiling:}
+    Use \texttt{ag.live\_node\_count()} (already instrumented) and
+    RSS tracking (already in \texttt{ResNet\_MNIST.py}) to verify allocation
+    reductions from O-4, O-11, O-17.
+
+  \item \textbf{Hardware counters:}
+    \begin{itemize}
+      \item \textbf{Linux:} \texttt{perf stat -e cycles,instructions,cache-misses}
+        to measure IPC, cache miss rates, and SIMD utilization.
+      \item \textbf{macOS:} \texttt{powermetrics --samplers cpu\_power} or
+        Instruments Counters template.
+    \end{itemize}
+    Use before/after O-1 to confirm the microkernel is compute-bound,
+    not memory-bound.
+\end{enumerate}
+
+
+%═══════════════════════════════════════════════════════════════════════════════
+\section{Summary of Findings}\label{sec:optsummary}
+
+\begin{tcolorbox}[title={Top 5 Quick Wins (no architectural changes)},colback=white]
+\begin{enumerate}
+  \item \textbf{O-2}: Add same-shape fast-path in \texttt{ops\_elmwise.cpp}
+    forward.  \emph{10 lines per op.}
+  \item \textbf{O-4}: Replace \texttt{Variable} matmul with direct
+    \texttt{sgemm\_f32} in conv forward/backward.
+    \emph{$\sim$20 lines changed per call site.}
+  \item \textbf{O-8}: Cache softmax in cross\_entropy forward.
+    \emph{5 lines.}
+  \item \textbf{O-15}: Cache \texttt{pick\_tiles\_runtime} result.
+    \emph{3 lines.}
+  \item \textbf{O-7}: Merge BN backward reduction passes.
+    \emph{$\sim$30 lines refactored.}
+\end{enumerate}
+\end{tcolorbox}
+
+\begin{tcolorbox}[title={Top 3 High-Effort / High-Reward},colback=white]
+\begin{enumerate}
+  \item \textbf{O-1}: Platform-SIMD microkernel ($\sim$80 lines per ISA;
+    3 ISAs = NEON, AVX2, SSE2; needs careful testing).
+  \item \textbf{O-3}: GEMM-based conv dX backward.  \emph{$\sim$60 lines
+    replacing the 6-loop.}
+  \item \textbf{O-16}: Conv+BN+ReLU fusion.  \emph{New module, $\sim$200
+    lines; requires custom backward.}
+\end{enumerate}
+\end{tcolorbox}
+
+The codebase is well-structured for these optimizations: the GEMM kernel is
+isolated in a single header, elementwise ops share a common pattern, and the
+convolution forward/backward are self-contained.  Each optimization can be
+implemented and tested independently.
+
+
+\chapter{Glossary}
+
+\begin{description}
+  \item[Autograd] Automatic differentiation---computing gradients by recording
+    and replaying operations.
+  \item[Backward pass] The reverse traversal of the computation graph to compute gradients.
+  \item[Broadcasting] Extending a smaller tensor to match a larger one by
+    replicating along size-1 dimensions.
+  \item[DAG] Directed Acyclic Graph---the structure of the computation graph.
+  \item[GEMM] General Matrix Multiply: $C \leftarrow \alpha AB + \beta C$.
+  \item[Grad] Short for gradient ($\partial L / \partial x$).
+  \item[im2col] Image-to-column: rearranging convolution input patches into a
+    matrix for GEMM-based convolution.
+  \item[Leaf node] A node with no parents (typically a parameter or input).
+  \item[OOM] Out Of Memory---when a process exceeds available RAM.
+  \item[RAII] Resource Acquisition Is Initialization---a C++ idiom where
+    constructors acquire and destructors release resources.
+  \item[Reference cycle] Two or more objects that reference each other via
+    smart pointers, preventing deallocation.
+  \item[RSS] Resident Set Size---the amount of physical RAM used by a process.
+  \item[SGEMM] Single-precision GEMM (float32).
+  \item[Tiling] Breaking a large computation into cache-sized blocks.
+  \item[Topological sort] Ordering DAG nodes so each node appears after its
+    dependencies.
+  \item[VJP] Vector-Jacobian Product---the fundamental operation of reverse-mode AD.
+  \item[weak\_ptr] A C++ smart pointer that observes a \texttt{shared\_ptr}-managed
+    object without preventing its destruction.
+\end{description}
+
+\end{document}

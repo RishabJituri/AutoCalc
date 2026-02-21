@@ -1,0 +1,27 @@
+ResNet MNIST Benchmark — 2026-02-20_174535
+==================================================
+n              = 60000
+batch_size     = 128
+epochs         = 1
+lr             = 0.1
+momentum       = 0.9
+weight_decay   = 0.0001
+seed           = 42
+step_interval  = 20
+log_interval   = 100
+compare_torch  = True
+
+Architecture: stem(1->32) -> ResBlock(32->32) -> ResBlock(32->64,s2) -> GAP -> FC(64->10)
+Init: Kaiming-uniform  bound = sqrt(6/fan_in)
+Optimizer: SGD(lr=0.1, momentum=0.9, wd=0.0001)
+
+==================================================
+AG Results:
+  loss:  2.4092 -> 0.1664
+  acc:   0.0903 -> 0.9515
+  time:  3681.0s
+
+Torch Results:
+  loss:  2.3065 -> 0.2003
+  acc:   0.0993 -> 0.9369
+  time:  385.8s
