@@ -175,9 +175,9 @@ void bind_nn(py::module_ &m) {
        py::arg("dilation_h")=1, py::arg("dilation_w")=1, py::arg("bias")=true, py::arg("init_scale")=0.02f, py::arg("seed")=0xC0FFEEULL)
     .def("forward", [](ag::nn::Conv2d& self, const ag::Variable& x){ return self.forward(x); });
 
-  // Sequential (do not expose default constructor to Python for now)
+  // Sequential
   py::class_<ag::nn::Sequential, ag::nn::Module, std::shared_ptr<ag::nn::Sequential>>(nn, "Sequential")
-    // Note: constructor intentionally not exposed; create instances via C++ or other factories
+    .def(py::init<>())
     .def("append", [](ag::nn::Sequential& s, std::shared_ptr<ag::nn::Module> m){ s.push(std::move(m)); })
     .def("forward", [](ag::nn::Sequential& s, const ag::Variable& x){ return s.forward(x); });
 

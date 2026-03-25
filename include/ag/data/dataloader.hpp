@@ -125,9 +125,9 @@ public:
   }
 
   Batch next() {
-    const std::size_t N = ds_->size();
     if (!has_next()) {
-      throw std::out_of_range("DataLoader::next(): no more batches");
+      // Return an empty batch instead of throwing so callers can check .size == 0
+      return Batch{ ag::Variable({}, {0}, false), ag::Variable({}, {0}, false), 0 };
     }
     std::size_t take = std::min<std::size_t>(opts_.batch_size, indices_.size() - cursor_);
     if (opts_.drop_last && take < opts_.batch_size) {

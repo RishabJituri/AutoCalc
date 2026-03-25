@@ -339,6 +339,23 @@ PYBIND11_MODULE(_backend, m) {
   m.def("flatten", &ag::flatten, py::arg("x"), py::arg("start_dim") = std::size_t{1});
   m.def("reshape", &ag::reshape, py::arg("x"), py::arg("new_shape"));
 
+  // Cat / concat
+  m.def("cat", &ag::cat, py::arg("inputs"), py::arg("axis") = 0);
+
+  // Upsample
+  m.def("upsample2d", &ag::upsample2d, py::arg("x"),
+        py::arg("scale_h") = std::size_t{2}, py::arg("scale_w") = std::size_t{2});
+
+  // Stats (softmax, argmax, reduce_max, logsumexp)
+  m.def("softmax", &ag::softmax, py::arg("x"), py::arg("axis") = -1);
+  m.def("reduce_max", &ag::reduce_max, py::arg("x"),
+        py::arg("axes") = std::vector<int>{}, py::arg("keepdims") = false);
+  m.def("logsumexp", &ag::logsumexp, py::arg("x"),
+        py::arg("axes") = std::vector<int>{}, py::arg("keepdims") = false);
+  m.def("argmax_lastdim", [](const ag::Variable& x) {
+    return ag::argmax_lastdim(x);
+  }, py::arg("x"));
+
   // Small QoL aliases at top-level (optional)
   m.def("matmul", &ag::matmul, py::arg("A"), py::arg("B"));
   m.def("reshape", &ag::reshape, py::arg("x"), py::arg("new_shape"));

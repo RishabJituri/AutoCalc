@@ -65,7 +65,8 @@ TEST("linalg/matmul_numeric_grad_single_entry") {
 // --- new tests appended below ---
 
 TEST("linalg/matmul_associativity_numeric") {
-    // Numerically check (A@B)@C ≈ A@(B@C) for small matrices
+    // Numerically check (A@B)@C ≈ A@(B@C) for small matrices.
+    // Tolerance is 1e-5 because -ffast-math may reorder FP ops.
     Variable A = tensor({ 0.5f,  1.0f,
                          -0.3f,  0.2f}, {2,2}, /*requires_grad=*/false);
     Variable B = tensor({ 1.1f, -0.4f,
@@ -76,7 +77,7 @@ TEST("linalg/matmul_associativity_numeric") {
     auto L = matmul(matmul(A,B), C);
     auto R = matmul(A, matmul(B,C));
     for (size_t i=0;i<L.value().size();++i) {
-        ASSERT_NEAR(L.value()[i], R.value()[i], 1e-12);
+        ASSERT_NEAR(L.value()[i], R.value()[i], 1e-5f);
     }
 }
 
@@ -138,72 +139,5 @@ TEST("linalg/matmul_with_identity_keeps_matrix") {
     for (size_t i=0;i<R2.value().size();++i) {
         ASSERT_NEAR(R2.value()[i], A2.value()[i], 1e-6f);
     }
-}
-
-// --- Added tests: associativity (numeric), grad w.r.t. B numeric check, identity behavior ---
-
-static Variable eye2(bool req=true) {
-    return tensor({1,0,0,1}, {2,2}, req);
-}
-
-TEST("linalg/matmul_associativity_numeric") {
-    // (A@B)@C ≈ A@(B@C)  (small numeric sanity)
-    Variable A = tensor({0.5f, 1.0f,
-                         -0.3f, 0.2f}, {2,2}, false);
-    Variable B = tensor({1.1f, -0.4f,
-                          0.3f,  0.7f}, {2,2}, false);
-    Variable C = tensor({0.9f, 0.0f,
-                         0.2f, 1.3f}, {2,2}, false);
-    auto L = matmul(matmul(A,B), C);
-    auto R = matmul(A, matmul(B,C));
-    for (size_t i=0;i<L.value().size();++i) {
-        ASSERT_NEAR(L.value()[i], R.value()[i], 1e-12);
-    }
-}
-
-TEST("linalg/matmul_grad_wrt_B_numeric") {
-    // L = sum((A@B)^2) ; finite-diff check for B[1,0]
-    Variable A = tensor({ 0.2f, -0.1f, 0.3f,
-                         -0.5f,  0.7f, 0.8f}, {2,3}, true);
-    Variable B = tensor({-0.6f, 0.9f,
-                          0.4f, 0.1f,
-                          0.0f, 0.5f}, {3,2}, true);
-    auto C = matmul(A,B);
-    std::vector<float> seed(C.value().size());
-    for (size_t i=0;i<seed.size();++i) seed[i] = 2.0f * C.value()[i]; // d/dC sum(C^2) = 2C
-    C.backward(seed);
-
-    float eps = 1e-4f;
-    auto Bv = B.value();
-    auto Bv_pos = Bv; Bv_pos[2] += eps; // [1,0] in row-major index = 1*2 + 0 = 2
-    auto Bv_neg = Bv; Bv_neg[2] -= eps;
-
-    auto Bpos = tensor(Bv_pos, {3,2}, false);
-    auto Bneg = tensor(Bv_neg, {3,2}, false);
-    auto Cpos = matmul(A, Bpos);
-    auto Cneg = matmul(A, Bneg);
-    float Lpos=0, Lneg=0;
-    for (float v : Cpos.value()) Lpos += v*v;
-    for (float v : Cneg.value()) Lneg += v*v;
-    float fd = (Lpos - Lneg)/(2*eps);
-
-    ASSERT_NEAR(B.grad()[2], fd, 1e-3f);
-}
-
-TEST("linalg/matmul_with_identity_keeps_matrix") {
-    // A @ I = A, I @ A = A
-    Variable A = tensor({ 1,2,3,
-                          4,5,6}, {2,3}, false);
-    Variable I3 = tensor({1,0,0,
-                          0,1,0,
-                          0,0,1}, {3,3}, false);
-    auto L = matmul(A, I3);
-    ASSERT_TRUE(L.shape()==std::vector<std::size_t>({2,3}));
-    for (size_t i=0;i<A.value().size();++i) ASSERT_NEAR(L.value()[i], A.value()[i], 1e-6f);
-
-    Variable I2 = eye2(false);
-    Variable A2 = eye2(false);
-    auto R = matmul(I2, A2);
-    for (size_t i=0;i<R.value().size();++i) ASSERT_NEAR(R.value()[i], A2.value()[i], 1e-6f);
 }
 

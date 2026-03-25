@@ -127,7 +127,7 @@ def test_resnet_module_python_subclass_converges():
         logits0 = net.forward(x_var)
         L0 = ag.nn.cross_entropy(logits0, targets)
         print("here")
-        loss0 = float(np.asarray(L0.value()))
+        loss0 = float(np.asarray(L0.value()).flat[0])
         print(loss0)
 
     if loss0 <= 1e-8:

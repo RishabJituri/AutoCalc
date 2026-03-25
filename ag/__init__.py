@@ -213,6 +213,14 @@ live_node_count = _backend.live_node_count
 stop_gradient = _backend.stop_gradient
 detach = _backend.detach
 
+# Milestone 1 new ops
+cat = _backend.cat
+upsample2d = _backend.upsample2d
+softmax = _backend.softmax
+reduce_max = _backend.reduce_max
+logsumexp = _backend.logsumexp
+argmax_lastdim = _backend.argmax_lastdim
+
 # Optionally import nn submodule if backend provides one
 if hasattr(_backend, "nn"):
     nn = _backend.nn
@@ -459,6 +467,7 @@ __all__ = [
     "reduce_sum", "reduce_mean", "broadcast_to",
     "is_grad_enabled", "set_grad_enabled", "nograd", "stop_gradient", "detach",
     "live_node_count",
+    "cat", "upsample2d", "softmax", "reduce_max", "logsumexp", "argmax_lastdim",
 ]
 
 if nn is not None:

@@ -7,10 +7,12 @@
 
 // Ops
 #include "ag/ops/activations.hpp"
+#include "ag/ops/cat.hpp"
 #include "ag/ops/elementwise.hpp"
 #include "ag/ops/linalg.hpp"
 #include "ag/ops/reduce.hpp"
 #include "ag/ops/reshape.hpp"
+#include "ag/ops/stats.hpp"
 
 // NN
 #include "ag/nn/module.hpp"
@@ -23,6 +25,7 @@
 #include "ag/nn/layers/pooling.hpp"
 #include "ag/nn/layers/dropout.hpp"
 #include "ag/nn/layers/lstm.hpp"
+#include "ag/nn/layers/upsample.hpp"
 
 #include "ag/nn/loss.hpp"
 #include "ag/nn/optim/sgd.hpp"
